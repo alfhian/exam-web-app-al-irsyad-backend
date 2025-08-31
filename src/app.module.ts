@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ExamModule } from './exams/exam.module';
+import { SubjectModule } from './subjects/subject.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { Subject } from './subjects/entities/subject.entity';
 import { Exam } from './exams/entities/exam.entity';
@@ -19,6 +20,7 @@ import { Choice } from './choices/entities/choice.entity';
     AuthModule,
     UsersModule,
     ExamModule,
+    SubjectModule,
     SupabaseModule,
     Subject,
     Exam,

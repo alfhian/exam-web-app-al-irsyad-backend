@@ -6,7 +6,8 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
-  DeleteDateColumn
+  DeleteDateColumn,
+  JoinColumn
 } from 'typeorm';
 import { Subject } from '../../subjects/entities/subject.entity';
 import { Question } from '../../questions/entities/question.entity';
@@ -24,6 +25,9 @@ export class Exam {
 
   @Column()
   duration: number; // in minutes
+
+  @Column({ type: 'text', nullable: true })
+  notes?: string;
 
   @CreateDateColumn()
   created_at: Date;
@@ -43,7 +47,11 @@ export class Exam {
   @Column({ length: 100, nullable: true })
   deleted_by?: string;
 
+  @Column({ type: 'uuid' })
+  subject_id: string;
+
   @ManyToOne(() => Subject, subject => subject.exams)
+  @JoinColumn({ name: 'subject_id' })
   subject: Subject;
 
   @OneToMany(() => Question, (question: Question) => question.exam)

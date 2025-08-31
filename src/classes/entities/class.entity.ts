@@ -2,28 +2,24 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  ManyToOne,
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
-  JoinColumn,
 } from 'typeorm';
-import { Exam } from '../../exams/entities/exam.entity';
-import { Classes } from '../../classes/entities/class.entity';
+import { Subject } from '../../subjects/entities/subject.entity';
 
-@Entity('subjects')
-export class Subject {
+@Entity('classes') // Optional: untuk kontrol nama tabel
+export class Classes {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Column({ length: 100 })
   name: string;
 
-  @Column({ length: 255, nullable: true })
-  description?: string;
+  @Column()
+  grade?: number;
 
-  // Audit fields
   @CreateDateColumn()
   created_at: Date;
 
@@ -42,15 +38,6 @@ export class Subject {
   @Column({ length: 100, nullable: true })
   deleted_by?: string;
 
-  // Foreign key to Classes
-  @Column()
-  class_id: string;
-
-  // @ManyToOne(() => Classes, (classes: Classes) => classes.subjects)
-  // @JoinColumn({ name: 'class_id' })
-  // classes: Classes;
-
-  // Relation to Exams
-  @OneToMany(() => Exam, (exam: Exam) => exam.subject)
-  exams: Exam[];
+  // @OneToMany(() => Subject, (subject: Subject) => subject.classes)
+  // subjects: Subject[];
 }

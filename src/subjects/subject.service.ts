@@ -12,14 +12,37 @@ export class SubjectService {
     return this.supabase.insert<Subject>('subjects', dto);
   }
 
-  async findAll(): Promise<Subject[]> {
-    const { data, error } = await this.supabase.client
-      .from('subjects')
-      .select('*')
-      .is('deleted_at', null);
+  async getDataWithPagination(
+    search: string,
+    sort: string,
+    order: 'asc' | 'desc',
+    page: number,
+    limit: number
+  ): Promise<{ data: Subject[]; meta: any }> {
+    const offset = (page - 1) * limit;
 
-    if (error) throw new Error(error.message);
-    return data ?? [];
+    const keyword = search.trim().toLowerCase();
+
+    const { data, error, count } = await this.supabase.client
+      .from('subjects')
+      .select('*', { count: 'exact' })
+      .or(`name.ilike.%${keyword}%,description.ilike.%${keyword}%`)
+      .order(sort, { ascending: order === 'asc' })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      throw new Error(`Supabase error: ${error.message}`);
+    }
+
+    return {
+      data,
+      meta: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil((count ?? 0) / limit),
+      },
+    };
   }
 
   async findById(id: string): Promise<Subject | null> {

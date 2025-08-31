@@ -7,6 +7,9 @@ export class UpdateSubjectDto extends PartialType(CreateSubjectDto) {
   @IsString()
   updated_by?: string;
 
+  @IsString()
+  class_id?: string;
+
   @IsOptional()
   @IsString()
   deletedBy?: string;
