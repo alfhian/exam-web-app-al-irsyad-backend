@@ -43,8 +43,40 @@ export class UsersController {
   }
 
 
+  // users.controller.ts
+  @Get('role')
+  async getUsersByRole(
+    @Query('role') role: string,
+    @Query('search') search: string = '',
+    @Query('sort') sort = 'name',
+    @Query('order') order: 'asc' | 'desc' = 'asc',
+    @Query('page') page = '1',
+    @Query('limit') limit = '10',
+  ) {
+    try {
+      console.log(role);
+      
+      const normalizedRole = role.toUpperCase() as Role; // pastikan match enum
+      console.log(normalizedRole);
+      
+      return await this.usersService.getUsersByRole(
+        normalizedRole,
+        search,
+        sort,
+        order,
+        Number(page),
+        Number(limit),
+      );
+    } catch (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
+
   @Get(':id')
   async findOne(@Param('id') id: string): Promise<User> {
+    console.log('testtt');
+    
     const user = await this.usersService.getUserById(id);
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
@@ -65,6 +97,22 @@ export class UsersController {
       ...body,
       created_by: createdBy,
     });
+  }
+
+  @Put('siswa/:id')
+  @Roles(Role.ADMIN)
+  async updateSiswa(
+    @Param('id') id: string,
+    @Body() body: Partial<User>,
+    @Req() req: Request
+  ): Promise<User> {
+    const updatedBy = (req as any).user['sub'];
+    const user = await this.usersService.getUserById(id);
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+
+    return this.usersService.updateUser(id, {...body, updated_by: updatedBy});
   }
 
   @Put(':id')

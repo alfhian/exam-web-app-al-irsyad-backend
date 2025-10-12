@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { User } from './entities/user.entity'; // Assuming you have a User entity defined
 import { SupabaseService } from '../supabase/supabase.service';
 import * as bcrypt from 'bcrypt';
+import { Role } from 'src/common/enums/role.enum';
 
 @Injectable()
 export class UsersService {
@@ -113,4 +114,49 @@ export class UsersService {
 
     return count;
   }
+
+
+  async getUsersByRole(
+    role: string,
+    search: string,
+    sort: string,
+    order: 'asc' | 'desc',
+    page: number,
+    limit: number,
+  ) {
+    const offset = (page - 1) * limit;
+
+    console.log('>>> role param diterima:', role);
+
+    const normalizedRole = role.toUpperCase();
+    console.log('>>> role normalized:', normalizedRole);
+
+    let query = this.supabase.client
+      .from('users')
+      .select('id, name, role', { count: 'exact' }) // ambil role biar kelihatan
+      .eq('role', normalizedRole)
+      .order(sort, { ascending: order === 'asc' })
+      .range(offset, offset + limit - 1);
+
+    if (search && search.trim() !== '') {
+      query = query.ilike('name', `%${search.trim()}%`);
+    }
+
+    const { data, error, count } = await query;
+
+    console.log('>>> hasil query:', { data, error, count });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return {
+      data,
+      total: count,
+      page,
+      limit,
+    };
+  }
+
+
 }

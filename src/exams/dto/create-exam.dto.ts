@@ -6,15 +6,21 @@ export class CreateExamDto {
   title: string;
 
   @IsString()
-  subjectId: string;
+  subject_id: string;
 
   @IsDateString()
   date: string;
 
+  @IsString()
+  type: string;
+
   @IsInt()
-  durationMinutes: number;
+  duration: number;
 
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsString()
+  created_by: string;
 }

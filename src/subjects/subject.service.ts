@@ -45,6 +45,25 @@ export class SubjectService {
     };
   }
 
+  async getDataOnly(): Promise<{ data: Subject[]; meta: any }> {
+    const { data, error, count } = await this.supabase.client
+      .from('subjects')
+      .select('*', { count: 'exact' })
+      .order('class_id', { ascending: true})
+      .order('name', { ascending: true});
+
+    if (error) {
+      throw new Error(`Supabase error: ${error.message}`);
+    }
+
+    return {
+      data,
+      meta: {
+        total: count,
+      },
+    };
+  }
+
   async findById(id: string): Promise<Subject | null> {
     const { data, error } = await this.supabase.client
       .from('subjects')

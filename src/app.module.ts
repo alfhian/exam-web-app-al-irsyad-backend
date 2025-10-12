@@ -7,10 +7,11 @@ import { UsersModule } from './users/users.module';
 import { ExamModule } from './exams/exam.module';
 import { SubjectModule } from './subjects/subject.module';
 import { SupabaseModule } from './supabase/supabase.module';
+import { QuestionnaireModule } from './questionnaires/questionnaire.module'
 import { Subject } from './subjects/entities/subject.entity';
 import { Exam } from './exams/entities/exam.entity';
-import { Question } from './questions/entities/question.entity';
 import { Choice } from './choices/entities/choice.entity';
+import { Questionnaire } from './questionnaires/entities/questionnaire.entity';
 
 @Module({
   imports: [
@@ -20,11 +21,12 @@ import { Choice } from './choices/entities/choice.entity';
     AuthModule,
     UsersModule,
     ExamModule,
+    QuestionnaireModule,
     SubjectModule,
     SupabaseModule,
     Subject,
     Exam,
-    Question,
+    Questionnaire,
     Choice,
   ],
   controllers: [AppController],

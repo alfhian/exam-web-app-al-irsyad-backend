@@ -3,35 +3,40 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
-  OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
 import { Exam } from '../../exams/entities/exam.entity';
-import { Choice } from '../../choices/entities/choice.entity';
+import { User } from '../../users/entities/user.entity';
 
-export type QuestionType = 'multiple_choice' | 'essay';
-
-@Entity('questions')
-export class Question {
+@Entity('questionnaires')
+export class Questionnaire {
   @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @Column({ length: 255 })
-  questionText: string;
-
-  @Column({ type: 'enum', enum: ['multiple_choice', 'essay'] })
-  type: QuestionType;
-
-  @Column('int')
-  points: number;
 
   @ManyToOne(() => Exam, (exam) => exam.questionnaires, { onDelete: 'CASCADE' })
   exam: Exam;
 
-  @OneToMany(() => Choice, (choice: Choice) => choice.question, { cascade: true })
-  choices: Choice[];
+  @Column('text')
+  question: string;
+
+  @Column({
+    type: 'enum',
+    enum: ['multiple_choice', 'essay'],
+  })
+  type: 'multiple_choice' | 'essay';
+
+  @Column({ type: "jsonb", nullable: true })
+  options: { type: "text" | "image"; value: string }[];
+
+  @Column('text', { nullable: true })
+  answer?: string;
+
+  @Column()
+  index: number;
+
+  /** AUDIT TRAIL FIELDS **/
 
   @CreateDateColumn()
   created_at: Date;

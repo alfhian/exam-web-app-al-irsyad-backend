@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { Subject } from '../../subjects/entities/subject.entity';
 import { Question } from '../../questions/entities/question.entity';
+import { Questionnaire } from '../../questionnaires/entities/questionnaire.entity';
 
 @Entity()
 export class Exam {
@@ -22,6 +23,9 @@ export class Exam {
 
   @Column({ type: 'timestamp' })
   date: Date;
+
+  @Column()
+  type: string;
 
   @Column()
   duration: number; // in minutes
@@ -54,6 +58,6 @@ export class Exam {
   @JoinColumn({ name: 'subject_id' })
   subject: Subject;
 
-  @OneToMany(() => Question, (question: Question) => question.exam)
-  questions: Question[];
+  @OneToMany(() => Questionnaire, (questionnaire) => questionnaire.exam)
+  questionnaires: Questionnaire[];
 }

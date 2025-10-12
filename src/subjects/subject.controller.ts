@@ -16,8 +16,8 @@ import {
 import { Subject } from './entities/subject.entity';
 import { SubjectService } from './subject.service';
 import { AuthGuard } from '@nestjs/passport';
-import { CreateSubjectDto } from './dto/create-subject.dto';
-import { UpdateSubjectDto } from './dto/update-subject.dto';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { Role } from 'src/common/enums/role.enum';
 
 @Controller('subjects')
 @UseGuards(AuthGuard('jwt'))
@@ -59,14 +59,34 @@ export class SubjectController {
     }
   }
 
+  @Get('all')
+  async getAllData() {
+    try {
+      return await this.subjectService.getDataOnly();
+    } catch (error) {
+      throw new InternalServerErrorException(error.message);
+    }
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.subjectService.findById(id);
   }
 
   @Put(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateSubjectDto) {
-    return this.subjectService.update(id, dto);
+  @Roles(Role.ADMIN)
+  async update(
+    @Param('id') id: string,
+    @Body() body: Partial<Subject>,
+    @Req() req: Request
+  ): Promise<Subject> {
+    const updatedBy = (req as any).user['sub'];
+    const user = await this.subjectService.findById(id);
+    if (!user) {
+      throw new NotFoundException(`Subject with ID ${id} not found`);
+    }
+
+    return this.subjectService.update(id, {...body, updated_by: updatedBy});
   }
 
   @Delete(':id')

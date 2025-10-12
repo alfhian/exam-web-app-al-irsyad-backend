@@ -11,9 +11,14 @@ export class SupabaseService {
   constructor() {
     this._client = createClient(
       process.env.SUPABASE_URL!,
-      process.env.SUPABASE_KEY!
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
   }
+
+  get storage() {
+    return this.client.storage;
+  }
+
 
   public get client(): SupabaseClient {
     return this._client;
