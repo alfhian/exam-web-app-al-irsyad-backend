@@ -7,8 +7,8 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
-import { Exam } from 'src/exams/entities/exam.entity';
-import { User } from 'src/users/entities/user.entity';
+import { Exam } from './exam.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity('exam_students')
 export class ExamStudent {

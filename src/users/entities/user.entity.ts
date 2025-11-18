@@ -27,7 +27,7 @@ export class User {
   @Column({ default: true })
   is_active: boolean;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ length: 10 })
   class_id?: string;
 
   @CreateDateColumn()

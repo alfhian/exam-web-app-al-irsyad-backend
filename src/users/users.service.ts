@@ -17,7 +17,15 @@ export class UsersService {
   ) {}
 
   async createUser(user: Partial<User>): Promise<User> {
+    delete user.id;
     console.log(user);
+
+    // Bersihkan string kosong
+    Object.keys(user).forEach(key => {
+      if (user[key] === "") {
+        user[key] = null;
+      }
+    });
     
     const newUser = this.userRepository.create(user);
     return this.userRepository.save(newUser);
