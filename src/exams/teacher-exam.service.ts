@@ -1,9 +1,20 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, Not, IsNull, In } from 'typeorm';
+import { ExamSubmission } from './entities/exam-submission.entity';
+import { Exam } from './entities/exam.entity';
+import { Questionnaire } from 'src/questionnaires/entities/questionnaire.entity';
 
 @Injectable()
 export class TeacherExamsService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    @InjectRepository(ExamSubmission)
+    private readonly examSubmissionRepository: Repository<ExamSubmission>,
+    @InjectRepository(Exam)
+    private readonly examRepository: Repository<Exam>,
+    @InjectRepository(Questionnaire)
+    private readonly questionnaireRepository: Repository<Questionnaire>,
+  ) {}
 
   /**
    * 🔹 Ambil daftar ujian yang sudah pernah dikerjakan siswa
@@ -19,12 +30,10 @@ export class TeacherExamsService {
     const offset = (page - 1) * limit;
 
     // Ambil semua exam_submissions dengan exam_id dan score
-    const { data: submissions, error: subErr } = await this.supabase.client
-      .from('exam_submissions')
-      .select('exam_id, score')
-      .not('exam_id', 'is', null);
-
-    if (subErr) throw new Error(`Supabase error (exam_submissions): ${subErr.message}`);
+    const submissions = await this.examSubmissionRepository.find({
+      select: ['exam_id', 'score'],
+      where: { exam_id: Not(IsNull()) }
+    });
 
     const examIds = [...new Set(submissions.map((s) => s.exam_id))];
     if (examIds.length === 0) {
@@ -39,35 +48,26 @@ export class TeacherExamsService {
     }, {});
 
     // Ambil daftar exam
-    let query = this.supabase.client
-      .from('exams')
-      .select(
-        `
-        id,
-        title,
-        type,
-        date,
-        duration,
-        subjects ( name ),
-        exam_submissions ( count )
-      `,
-        { count: 'exact' },
-      )
-      .in('id', examIds)
-      .order(sort, { ascending: order === 'asc' })
-      .range(offset, offset + limit - 1);
+    const queryBuilder = this.examRepository.createQueryBuilder('exam')
+      .leftJoinAndSelect('exam.subject', 'subjects')
+      .leftJoin('exam_submissions', 'submission', 'submission.exam_id = exam.id')
+      .addSelect('COUNT(submission.id)', 'submission_count')
+      .where('exam.id IN (:...examIds)', { examIds })
+      .groupBy('exam.id, subjects.id')
+      .orderBy(`exam.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
+      .skip(offset)
+      .take(limit);
 
     // Filter pencarian
     if (search) {
       const keyword = search.trim().toLowerCase();
-      query = query.or(
-        `title.ilike.%${keyword}%,type.ilike.%${keyword}%,subjects.name.ilike.%${keyword}%`,
+      queryBuilder.andWhere(
+        '(LOWER(exam.title) LIKE :keyword OR LOWER(exam.type) LIKE :keyword OR LOWER(subjects.name) LIKE :keyword)',
+        { keyword: `%${keyword}%` }
       );
     }
 
-    const { data, count, error } = await query;
-    if (error)
-      throw new Error(`Supabase error (teacher exams): ${error.message}`);
+    const [data, total] = await queryBuilder.getManyAndCount();
 
     // Tambahkan kolom unscored_count
     const examsWithUnscored = data.map((exam) => ({
@@ -78,10 +78,10 @@ export class TeacherExamsService {
     return {
       data: examsWithUnscored,
       meta: {
-        total: count ?? 0,
+        total,
         page,
         limit,
-        totalPages: Math.ceil((count ?? 0) / limit),
+        totalPages: Math.ceil(total / limit),
       },
     };
   }
@@ -93,42 +93,31 @@ export class TeacherExamsService {
   async getStudentsByExam(examId: string, search = '', page = 1, limit = 10) {
     const offset = (page - 1) * limit;
 
-    const { data, count, error } = await this.supabase.client
-      .from('exam_submissions')
-      .select(
-        `
-        id,
-        created_at,
-        student_id,
-        score,
-        users:student_id ( id, name ),
-        exams:exam_id ( id, title, type, date )
-      `,
-        { count: 'exact' },
-      )
-      .eq('exam_id', examId)
-      .order('score', { ascending: true, nullsFirst: true }) // 🔹 yang belum discoring tampil duluan
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    const queryBuilder = this.examSubmissionRepository.createQueryBuilder('submission')
+      .leftJoinAndSelect('submission.student', 'users')
+      .leftJoinAndSelect('submission.exam', 'exams')
+      .where('submission.exam_id = :examId', { examId })
+      .orderBy('submission.score', 'ASC', 'NULLS FIRST')
+      .addOrderBy('submission.created_at', 'DESC')
+      .skip(offset)
+      .take(limit);
 
-    if (error)
-      throw new Error(`Supabase error (students submissions): ${error.message}`);
+    const [data, total] = await queryBuilder.getManyAndCount();
 
     // Filter berdasarkan nama siswa
     const filteredData = search
       ? data.filter((s) => {
-          const user = Array.isArray(s.users) ? s.users[0] : s.users;
-          return user?.name?.toLowerCase().includes(search.toLowerCase());
+          return s.student?.name?.toLowerCase().includes(search.toLowerCase());
         })
       : data;
 
     return {
       data: filteredData,
       meta: {
-        total: count ?? filteredData.length,
+        total: search ? filteredData.length : total,
         page,
         limit,
-        totalPages: Math.ceil((count ?? filteredData.length) / limit),
+        totalPages: Math.ceil((search ? filteredData.length : total) / limit),
       },
     };
   }
@@ -137,44 +126,39 @@ export class TeacherExamsService {
    * 🔹 Ambil detail ujian yang disubmit siswa
    */
   async getSubmissionDetail(submissionId: string) {
-    const { data: submission, error: subErr } = await this.supabase.client
-      .from('exam_submissions')
-      .select(
-        `
-        id,
-        exam_id,
-        student_id,
-        score,
-        created_at,
-        users:student_id ( id, name ),
-        exams:exam_id ( id, title, type, date ),
-        answers
-      `,
-      )
-      .eq('id', submissionId)
-      .single();
+    const submission = await this.examSubmissionRepository.findOne({
+      where: { id: submissionId },
+      relations: ['student', 'exam', 'exam.subject']
+    });
 
-    if (subErr)
-      throw new Error(`Supabase error (submission): ${subErr.message}`);
-
-    if (!submission)
+    if (!submission) {
       throw new NotFoundException(`Submission ${submissionId} not found.`);
+    }
 
-    const { data: questions, error: qErr } = await this.supabase.client
-      .from('questionnaires')
-      .select('id, question, type, options, answer')
-      .eq('exam_id', submission.exam_id)
-      .order('index', { ascending: true });
+    const answerList = submission.answers || [];
+    
+    // Ambil semua question_id unik dari jawaban
+    const questionIds = [...new Set(answerList.map((a) => a.question_id))];
 
-    if (qErr)
-      throw new Error(`Supabase error (questions): ${qErr.message}`);
+    // Ambil semua pertanyaan terkait dari tabel questionnaire
+    const questions = await this.questionnaireRepository.findBy({
+      id: questionIds.length > 0 ? In(questionIds) : undefined,
+    });
 
+    // Gabungkan pertanyaan dengan jawaban
+    const answersWithQuestions = answerList.map((a) => ({
+      ...a,
+      question: questions.find((q) => q.id === a.question_id) || null,
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/prefer-for-of, @typescript-eslint/no-empty-function, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/no-empty-interface, @typescript-eslint/no-unused-expressions, @typescript-eslint/no-empty-block
     const mappedQuestions = questions.map((q) => {
       const ans = submission.answers?.find((a) => a.question_id === q.id);
       return {
         ...q,
         student_answer: ans?.answer ?? null,
         is_correct: ans?.is_correct ?? null,
+        answers: answersWithQuestions,
       };
     });
 
@@ -182,8 +166,11 @@ export class TeacherExamsService {
       id: submission.id,
       created_at: submission.created_at,
       score: submission.score,
-      exam: submission.exams,
-      student: submission.users,
+      exam: {
+        ...submission.exam,
+        subject: submission.exam.subject || null,
+      },
+      student: submission.student,
       questions: mappedQuestions,
     };
   }
@@ -196,32 +183,26 @@ export class TeacherExamsService {
     scores: { question_id: string; is_correct: boolean }[],
     totalScore?: number,
   ) {
-    const { data: existing, error: fetchErr } = await this.supabase.client
-      .from('exam_submissions')
-      .select('id, answers, score')
-      .eq('id', submissionId)
-      .single();
+    const existing = await this.examSubmissionRepository.findOne({
+      where: { id: submissionId },
+      select: ['id', 'answers', 'score']
+    });
 
-    if (fetchErr || !existing)
+    if (!existing) {
       throw new NotFoundException('Submission not found');
+    }
 
     const updatedAnswers = (existing.answers || []).map((a) => {
       const match = scores.find((s) => s.question_id === a.question_id);
       return match ? { ...a, is_correct: match.is_correct } : a;
     });
 
-    const { data, error: updateErr } = await this.supabase.client
-      .from('exam_submissions')
-      .update({
-        answers: updatedAnswers,
-        score: typeof totalScore === 'number' ? totalScore : existing.score,
-      })
-      .eq('id', submissionId)
-      .select()
-      .single();
+    existing.answers = updatedAnswers;
+    if (typeof totalScore === 'number') {
+      existing.score = totalScore;
+    }
 
-    if (updateErr)
-      throw new Error(`Supabase error (update scoring): ${updateErr.message}`);
+    const data = await this.examSubmissionRepository.save(existing);
 
     return {
       message: 'Scoring updated successfully',

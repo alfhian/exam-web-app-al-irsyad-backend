@@ -10,10 +10,11 @@ import {
   BadRequestException,
   Query,
   InternalServerErrorException,
-  UseGuards, 
+  UseGuards,
   Req,
 } from '@nestjs/common';
 import { ExamService } from './exam.service';
+import { ExamStudentsService } from './exam-student.service';
 import { Exam } from './entities/exam.entity';
 import { UpdateExamDto } from './dto/update-exam.dto';
 import { AuthGuard } from '@nestjs/passport';
@@ -22,8 +23,14 @@ import { Roles } from 'src/common/decorators/roles.decorator';
 @Controller('exams')
 @UseGuards(AuthGuard('jwt'))
 export class ExamController {
-  constructor(private readonly examService: ExamService) {}
+  constructor(
+    private readonly examService: ExamService,
+    private readonly examStudentsService: ExamStudentsService,
+  ) {}
 
+  // ------------------------------
+  // CREATE EXAM
+  // ------------------------------
   @Post()
   async create(@Body() body: Partial<Exam>, @Req() req: Request): Promise<Exam> {
     const createdBy = (req as any).user['sub'];
@@ -40,12 +47,12 @@ export class ExamController {
       );
     }
 
-    let formattedDate: string = '';
-    if (typeof body.date === 'string') {
-      formattedDate = body.date;
-    } else if (body.date instanceof Date) {
-      formattedDate = body.date.toISOString();
-    }
+    const formattedDate =
+      typeof body.date === 'string'
+        ? body.date
+        : body.date instanceof Date
+        ? body.date.toISOString()
+        : '';
 
     return this.examService.create({
       title: body.title,
@@ -58,6 +65,9 @@ export class ExamController {
     });
   }
 
+  // ------------------------------
+  // GET ALL EXAMS (WITH PAGINATION)
+  // ------------------------------
   @Get()
   async getAll(
     @Query('search') search: string = '',
@@ -79,6 +89,9 @@ export class ExamController {
     }
   }
 
+  // ------------------------------
+  // GET TODAY EXAMS
+  // ------------------------------
   @Get('today')
   async getToday(
     @Req() req: Request,
@@ -89,7 +102,6 @@ export class ExamController {
     @Query('limit') limit = '10',
   ) {
     const userlogin = (req as any).user['sub'];
-    
     try {
       return await this.examService.getTodayExamsWithPagination(
         userlogin,
@@ -104,11 +116,17 @@ export class ExamController {
     }
   }
 
+  // ------------------------------
+  // GET ONE EXAM BY ID
+  // ------------------------------
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.examService.findById(id);
   }
 
+  // ------------------------------
+  // GET EXAM QUESTIONS
+  // ------------------------------
   @Get(':id/questions')
   async getExamQuestions(@Param('id') examId: string) {
     try {
@@ -118,31 +136,53 @@ export class ExamController {
     }
   }
 
+  // ------------------------------
+  // UPDATE EXAM
+  // ------------------------------
   @Put(':id')
   update(@Param('id') id: string, @Body() dto: UpdateExamDto) {
     return this.examService.update(id, dto);
   }
 
+  // ------------------------------
+  // SOFT DELETE EXAM
+  // ------------------------------
   @Delete(':id')
   softDelete(@Param('id') id: string, @Body('deletedBy') deletedBy: string) {
     return this.examService.softDelete(id, deletedBy);
   }
 
+  // ------------------------------
+  // GET EXAM STUDENTS
+  // ------------------------------
   @Get(':id/students')
   async getStudents(@Param('id') examId: string) {
     try {
-      return await this.examService.getExamStudents(examId);
+      return await this.examStudentsService.getExamStudents(examId);
     } catch (error) {
       throw new InternalServerErrorException(error.message);
     }
   }
 
+  // ------------------------------
+  // ASSIGN STUDENTS TO EXAM
+  // ------------------------------
   @Post(':id/students')
   async assignStudents(
     @Param('id') examId: string,
     @Body('studentIds') studentIds: string[],
+    @Req() req: any,
   ) {
-    return this.examService.assignStudents(examId, studentIds);
-  }
+    const createdBy = req.user?.sub;
 
+    if (!studentIds?.length) {
+      throw new BadRequestException('studentIds tidak boleh kosong');
+    }
+
+    return this.examStudentsService.assignStudents(
+      examId,
+      studentIds,
+      createdBy,
+    );
+  }
 }

@@ -13,7 +13,7 @@ import { Subject } from '../../subjects/entities/subject.entity';
 import { Question } from '../../questions/entities/question.entity';
 import { Questionnaire } from '../../questionnaires/entities/questionnaire.entity';
 
-@Entity()
+@Entity("exams")
 export class Exam {
   @PrimaryGeneratedColumn('uuid')
   id: string;

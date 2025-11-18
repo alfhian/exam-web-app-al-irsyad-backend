@@ -23,4 +23,8 @@ export class CreateExamSubmissionDto {
   @ValidateNested({ each: true })
   @Type(() => AnswerDto)
   answers: AnswerDto[];
+
+  @IsUUID()
+  @IsNotEmpty()
+  created_by: string;
 }

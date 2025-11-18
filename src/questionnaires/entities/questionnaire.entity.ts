@@ -2,6 +2,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  JoinColumn,
   ManyToOne,
   CreateDateColumn,
   UpdateDateColumn,
@@ -15,8 +16,12 @@ export class Questionnaire {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ManyToOne(() => Exam, (exam) => exam.questionnaires, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Exam, (exam) => exam.questionnaires)
+  @JoinColumn({ name: 'exam_id' })
   exam: Exam;
+
+  @Column({ type: 'uuid' })
+  exam_id: string;
 
   @Column('text')
   question: string;

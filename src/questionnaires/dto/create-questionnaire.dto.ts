@@ -1,18 +1,30 @@
-import { Transform, Type } from 'class-transformer';
-import { IsNotEmpty, IsOptional, IsString, IsUUID, IsIn, IsArray, IsInt, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  IsIn,
+  IsArray,
+  IsInt,
+  ValidateNested,
+  ValidateIf,
+} from 'class-validator';
 
 class OptionDto {
   @IsString()
-  type: "text" | "image";
+  @IsIn(['text', 'image'])
+  type: 'text' | 'image' = 'text';
 
   @IsString()
+  @IsNotEmpty()
   value: string;
 }
 
 export class CreateQuestionnaireDto {
   @IsUUID()
-  @IsNotEmpty()
-  exam_id: string;
+  @IsOptional()
+  exam_id?: string; // ✅ optional karena diambil dari @Param di controller
 
   @IsString()
   @IsNotEmpty()
@@ -22,16 +34,17 @@ export class CreateQuestionnaireDto {
   @IsIn(['multiple_choice', 'essay'])
   type: 'multiple_choice' | 'essay';
 
-  // Kalau multiple_choice → isi array string
-  @IsOptional()
+  // ✅ hanya divalidasi bila type === 'multiple_choice'
+  @ValidateIf((o) => o.type === 'multiple_choice')
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OptionDto)
   options?: OptionDto[];
 
-  // Jawaban benar / referensi
-  @IsOptional()
+  // ✅ hanya divalidasi bila type === 'multiple_choice'
+  @ValidateIf((o) => o.type === 'multiple_choice')
   @IsString()
+  @IsOptional()
   answer?: string;
 
   @Type(() => Number)

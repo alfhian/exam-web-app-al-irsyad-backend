@@ -1,104 +1,97 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service';
-import * as multer from 'multer';
+import { InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
-import { File as MulterFile } from 'multer';
+import * as ffmpeg from 'fluent-ffmpeg';
+import * as fs from 'fs';
+import * as path from 'path';
+import { ExamSession } from './entities/exam-session.entity';
+import { ExamSubmission } from './entities/exam-submission.entity';
 
 @Injectable()
 export class ExamSessionService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    @InjectRepository(ExamSession)
+    private readonly examSessionRepository: Repository<ExamSession>,
+    private readonly dataSource: DataSource,
+  ) {}
 
   async startSession(examId: string, studentId: string) {
-    const { data, error } = await this.supabase.client
-      .from('exam_sessions')
-      .insert({ exam_id: examId, student_id: studentId })
-      .select()
-      .single();
-
-    if (error) throw new Error(error.message);
-    return data;
+    const session = this.examSessionRepository.create({
+      exam_id: examId,
+      student_id: studentId,
+    });
+    return this.examSessionRepository.save(session);
   }
 
   async incrementTabSwitch(sessionId: string) {
-    // Fetch current tab_switch_count
-    const { data: session, error: fetchError } = await this.supabase.client
-      .from('exam_sessions')
-      .select('tab_switch_count')
-      .eq('id', sessionId)
-      .single();
+    const session = await this.examSessionRepository.findOne({ where: { id: sessionId } });
+    if (!session) throw new Error('Session not found');
 
-    if (fetchError) throw new Error(fetchError.message);
-
-    const currentCount = session?.tab_switch_count ?? 0;
-
-    // Update with incremented value
-    const { data, error } = await this.supabase.client
-      .from('exam_sessions')
-      .update({ tab_switch_count: currentCount + 1 })
-      .eq('id', sessionId)
-      .select()
-      .single();
-
-    if (error) throw new Error(error.message);
-    return data;
+    session.tab_switch_count = (session.tab_switch_count || 0) + 1;
+    return this.examSessionRepository.save(session);
   }
 
-
   async finishSession(sessionId: string) {
-    const { data, error } = await this.supabase.client
-        .from('exam_sessions')
-        .update({ finished: true })
-        .eq('id', sessionId)
-        .select(); // ⚡ jangan pakai .single()
+    const session = await this.examSessionRepository.findOne({ where: { id: sessionId } });
+    if (!session) throw new Error(`Session dengan id ${sessionId} tidak ditemukan`);
 
-    if (error) {
-        throw new Error(`Supabase error (finishSession): ${error.message}`);
-    }
+    session.finished = true;
+    return this.examSessionRepository.save(session);
+  }
 
-    // Supabase selalu balikin array di .select()
-    if (!data || data.length === 0) {
-        throw new Error(`Session dengan id ${sessionId} tidak ditemukan atau tidak diupdate`);
-    }
+  async uploadVideo(sessionId: string, file: Express.Multer.File, user?: any) {
+    try {
+      if (!file) throw new InternalServerErrorException('No file uploaded');
 
-    // balikin baris pertama
-    return data[0];
-	}
-  async uploadVideo(sessionId: string, file: MulterFile) {
-    const fileName = `session-${sessionId}-${randomUUID()}.webm`;
-		console.log('Uploading file:', fileName);
-		
+      const uploadDir = path.resolve('uploads', 'recordings');
+      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-    // ✅ upload ke bucket "exam-recordings"
-    const { error: uploadError } = await this.supabase.client.storage
-      .from('exam-recordings')
-      .upload(fileName, file.buffer, {
-        contentType: 'video/webm',
-        upsert: false,
+      const rawFile = path.join(uploadDir, `raw-${sessionId}-${randomUUID()}.webm`);
+      await fs.promises.writeFile(rawFile, file.buffer);
+
+      const compressedFileName = `session-${sessionId}-${randomUUID()}.mp4`;
+      const compressedFilePath = path.join(uploadDir, compressedFileName);
+
+      console.log('🎬 Compressing video...');
+      await new Promise((resolve, reject) => {
+        ffmpeg(rawFile)
+          .outputOptions([
+            '-vcodec libx264',
+            '-preset veryfast',
+            '-crf 28',       // quality–size balance (lower = better quality)
+            '-b:a 96k',
+            '-vf scale=640:-1',
+          ])
+          .save(compressedFilePath)
+          .on('end', resolve)
+          .on('error', reject);
       });
 
-    if (uploadError) {
-      throw new InternalServerErrorException(
-        `Supabase upload error: ${uploadError.message}`,
-      );
+      // 🧹 Hapus file mentah
+      fs.unlinkSync(rawFile);
+
+      // 🗄️ Simpan metadata di DB
+      const submissionRepo = this.dataSource.getRepository(ExamSubmission);
+      const submission = await submissionRepo.findOne({ where: { exam_id: sessionId } });
+      if (submission) {
+        submission.file_name = compressedFileName;
+        submission.file_path = `/uploads/recordings/${compressedFileName}`;
+        submission.updated_by = user?.id || null;
+        submission.updated_at = new Date();
+        await submissionRepo.save(submission);
+      }
+
+      return {
+        success: true,
+        fileName: compressedFileName,
+        fileUrl: `/uploads/recordings/${compressedFileName}`,
+        message: '✅ Video uploaded & compressed successfully',
+      };
+    } catch (err) {
+      console.error('❌ Video compression failed:', err);
+      throw new InternalServerErrorException('Failed to upload or compress video');
     }
-
-    // 🔐 Generate signed URL (valid 24 jam = 86400 detik)
-    const { data: signedData, error: signedError } =
-      await this.supabase.client.storage
-        .from('exam-recordings')
-        .createSignedUrl(fileName, 60 * 60 * 24);
-
-    if (signedError) {
-      throw new InternalServerErrorException(
-        `Supabase signed URL error: ${signedError.message}`,
-      );
-    }
-
-    return {
-      fileName,
-      signedUrl: signedData.signedUrl,
-      expiresIn: '24h',
-    };
   }
 
 }

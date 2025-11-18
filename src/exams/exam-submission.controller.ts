@@ -56,20 +56,26 @@ export class ExamSubmissionController {
   @Post(':examId')
   async submitExam(
     @Param('examId') examId: string,
-    @Body('answers') answers: Record<string, any>,
+    @Body() body: { answers: any[] },
     @Req() req: any,
   ) {
     try {
-      const studentId = req.user?.sub; // ambil dari JWT
+      const studentId = req.user?.sub;
+      console.log('Raw body:', body);
+      console.log('isArray(answers)?', Array.isArray(body.answers));
+
       return await this.examSubmissionService.submit({
         exam_id: examId,
         student_id: studentId,
-        answers,
-      } as CreateExamSubmissionDto);
+        answers: body.answers,
+        created_by: studentId,
+      });
     } catch (error) {
+      console.error('❌ Submit error:', error);
       throw new InternalServerErrorException(error.message);
     }
   }
+
 
   @Get(':examId/me')
   async checkMySubmission(@Param('examId') examId: string, @Req() req: any) {

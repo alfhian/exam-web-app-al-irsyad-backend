@@ -86,11 +86,11 @@ export class AuthService {
       throw new UnauthorizedException('User ID tidak terdaftar');
     }
     
-    if (!user[0].is_active) {
+    if (!user.is_active) {
       throw new UnauthorizedException('Akun tidak aktif');
     }
 
-    const isPasswordValid = bcrypt.compareSync(password, user[0].password);
+    const isPasswordValid = bcrypt.compareSync(password, user.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Password salah');
     }
@@ -113,11 +113,11 @@ export class AuthService {
     
 
     const payload = {
-      sub: user[0].id,
-      userid: user[0].userid,
-      role: user[0].role,
-      name: user[0].name,
-      is_active: user[0].is_active,
+      sub: user.id,
+      userid: user.userid,
+      role: user.role,
+      name: user.name,
+      is_active: user.is_active,
     };
 
     return {

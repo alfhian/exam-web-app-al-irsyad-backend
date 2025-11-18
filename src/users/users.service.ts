@@ -1,21 +1,26 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
-import { User } from './entities/user.entity'; // Assuming you have a User entity defined
-import { SupabaseService } from '../supabase/supabase.service';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, Like, ILike, IsNull, DataSource } from 'typeorm';
+import { User } from './entities/user.entity';
 import * as bcrypt from 'bcrypt';
 import { Role } from 'src/common/enums/role.enum';
+import { Exam } from 'src/exams/entities/exam.entity';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
-
   constructor(
-    private readonly supabase: SupabaseService
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource
   ) {}
 
   async createUser(user: Partial<User>): Promise<User> {
     console.log(user);
     
-    return this.supabase.insert<User>('users', user);
+    const newUser = this.userRepository.create(user);
+    return this.userRepository.save(newUser);
   }
 
   async getUsersWithPagination(
@@ -26,43 +31,54 @@ export class UsersService {
     limit: number
   ): Promise<{ data: User[]; meta: any }> {
     const offset = (page - 1) * limit;
-
     const keyword = search.trim().toLowerCase();
 
-    const { data, error, count } = await this.supabase.client
-      .from('users')
-      .select('*', { count: 'exact' })
-      .or(`name.ilike.%${keyword}%,role.ilike.%${keyword}%,userid.ilike.%${keyword}%`)
-      .order(sort, { ascending: order === 'asc' })
-      .range(offset, offset + limit - 1);
+    const queryBuilder = this.userRepository.createQueryBuilder('user')
+      .where('user.deleted_at IS NULL');
 
-    if (error) {
-      throw new Error(`Supabase error: ${error.message}`);
+    if (keyword) {
+      queryBuilder.andWhere(
+        '(LOWER(user.name) LIKE :keyword OR LOWER(user.role) LIKE :keyword OR LOWER(user.userid) LIKE :keyword)',
+        { keyword: `%${keyword}%` }
+      );
     }
+
+    queryBuilder
+      .orderBy(`user.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
+      .skip(offset)
+      .take(limit);
+
+    const [data, total] = await queryBuilder.getManyAndCount();
 
     return {
       data,
       meta: {
-        total: count,
+        total,
         page,
         limit,
-        totalPages: Math.ceil((count ?? 0) / limit),
+        totalPages: Math.ceil(total / limit),
       },
     };
   }
 
-
-	async getAllUsers() {
-    return this.supabase.findAll<User>('users');
+  async getAllUsers(): Promise<User[]> {
+    return this.userRepository.find({
+      where: { deleted_at: IsNull() },
+      order: { is_active: 'DESC', name: 'ASC' }
+    });
   }
 
   async getUserByNisNik(userid: string | number): Promise<User | null> {
-		return this.supabase.findByNisNik<User>('users', userid);
-	}
+    return this.userRepository.findOne({
+      where: { userid: String(userid), deleted_at: IsNull() }
+    });
+  }
 
-	async getUserById(id: string | number): Promise<User | null> {
-		return this.supabase.findByUserId<User>('users', id);
-	}
+  async getUserById(id: string | number): Promise<User | null> {
+    return this.userRepository.findOne({
+      where: { id: String(id), deleted_at: IsNull() }
+    });
+  }
 
   async updateUserStatus(id: string | number, isActive: boolean, updatedAt: Date, updatedBy: string): Promise<User> {
     const user = await this.getUserById(id);
@@ -70,19 +86,12 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
 
-    const updated = await this.supabase.update<User>('users', id, {
-      is_active: isActive,
-      updated_at: updatedAt,
-      updated_by: updatedBy,
-    });
+    user.is_active = isActive;
+    user.updated_at = updatedAt;
+    user.updated_by = updatedBy;
 
-    if (!updated) {
-      throw new NotFoundException(`Failed to update status for user ${id}`);
-    }
-
-    return updated;
+    return this.userRepository.save(user);
   }
-
 
   async updateUser(id: string | number, body: Partial<User>): Promise<User> {
     const user = await this.getUserById(id);
@@ -90,31 +99,50 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
 
-    const updated = await this.supabase.update<User>('users', id, body);
-
-    if (!updated) {
-      throw new NotFoundException(`Failed to update status for user ${id}`);
-    }
-
-    return updated;
+    Object.assign(user, body);
+    return this.userRepository.save(user);
   }
 
+  private generateRandomString(length = 8): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
 
-  async generatePasswordSiswa(password: string): Promise<number> {
-    const newPass = bcrypt.hashSync(password, 10);// Hash the password before saving
-    const count = await this.supabase.updateAllByRole<User>('users', 'SISWA', {
-      password: newPass,
-    });
+  /**
+   * Generate one random password, set ALL SISWA to that password (hashed),
+   * and return the plain new password and updated count.
+   */
+  async generateSamePasswordForAllSiswa(): Promise<{ updated: number; newPassword: string }> {
+    // 1) generate plain password
+    const rawPassword = `SISWA-${this.generateRandomString(8)}`;
 
-    if (count === 0) {
+    // 2) hash it
+    const hashed = bcrypt.hashSync(rawPassword, 10);
+
+    // 3) update all SISWA using query builder for efficiency
+    const result = await this.userRepository
+      .createQueryBuilder()
+      .update(User)
+      .set({ password: hashed })
+      .where('role = :role', { role: 'SISWA' })
+      .andWhere('deleted_at IS NULL')
+      .execute();
+
+    const affected = result.affected ?? 0;
+
+    if (affected === 0) {
       throw new NotFoundException('No SISWA users found to update');
     }
 
-    this.logger.log(`Updated ${count} SISWA passwords`);
+    // ⚠️ Jangan log password plain di production; hanya untuk debugging lokal jika perlu
+    this.logger.log(`Updated ${affected} SISWA passwords to SAME new password`);
 
-    return count;
+    return { updated: affected, newPassword: rawPassword };
   }
-
 
   async getUsersByRole(
     role: string,
@@ -123,38 +151,58 @@ export class UsersService {
     order: 'asc' | 'desc',
     page: number,
     limit: number,
+    examId?: string,
   ) {
-    const offset = (page - 1) * limit;
-
-    console.log('>>> role param diterima:', role);
-
+    const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 10;
+    const offset = (safePage - 1) * safeLimit;
     const normalizedRole = role.toUpperCase();
-    console.log('>>> role normalized:', normalizedRole);
 
-    let query = this.supabase.client
-      .from('users')
-      .select('id, name, role', { count: 'exact' }) // ambil role biar kelihatan
-      .eq('role', normalizedRole)
-      .order(sort, { ascending: order === 'asc' })
-      .range(offset, offset + limit - 1);
+    let classId: string | null = null;
+
+    // ✅ Ambil class_id dari relasi Exam → Subject
+    if (examId) {
+      const examWithSubject = await this.dataSource
+        .getRepository(Exam)
+        .createQueryBuilder('exam')
+        .leftJoinAndSelect('exam.subject', 'subject')
+        .select(['exam.id', 'subject.class_id'])
+        .where('exam.id = :examId', { examId })
+        .getOne();
+
+      if (examWithSubject?.subject?.class_id) {
+        classId = examWithSubject.subject.class_id;
+      }
+    }
+
+    // ✅ Query user berdasarkan role, optional search dan class filter
+    const queryBuilder = this.userRepository
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.name', 'user.role', 'user.userid', 'user.class_id', 'user.class_name'])
+      .where('user.role = :role', { role: normalizedRole })
+      .andWhere('user.deleted_at IS NULL')
+      .orderBy(`user.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
+      .skip(offset)
+      .take(safeLimit);
 
     if (search && search.trim() !== '') {
-      query = query.ilike('name', `%${search.trim()}%`);
+      queryBuilder.andWhere('LOWER(user.name) LIKE :search', {
+        search: `%${search.trim().toLowerCase()}%`,
+      });
     }
 
-    const { data, error, count } = await query;
-
-    console.log('>>> hasil query:', { data, error, count });
-
-    if (error) {
-      throw new Error(error.message);
+    // ✅ Filter berdasarkan class_id dari subject (jika ditemukan)
+    if (classId) {
+      queryBuilder.andWhere('user.class_id = :classId', { classId });
     }
+
+    const [data, total] = await queryBuilder.getManyAndCount();
 
     return {
       data,
-      total: count,
-      page,
-      limit,
+      total,
+      page: safePage,
+      limit: safeLimit,
     };
   }
 

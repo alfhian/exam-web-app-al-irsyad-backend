@@ -1,68 +1,61 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { SupabaseService } from '../supabase/supabase.service';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { Question } from './entities/question.entity';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 
 @Injectable()
 export class QuestionService {
-  constructor(private readonly supabase: SupabaseService) {}
+  constructor(
+    @InjectRepository(Question)
+    private readonly questionRepository: Repository<Question>
+  ) {}
 
   async create(dto: CreateQuestionDto): Promise<Question> {
-    return this.supabase.insert<Question>('questions', {
+    const question = this.questionRepository.create({
       ...dto,
       type: dto.type as Question['type'],
     });
+    return this.questionRepository.save(question);
   }
 
   async findAll(examId?: string): Promise<Question[]> {
-    let query = this.supabase.client
-      .from('questions')
-      .select('*')
-      .is('deleted_at', null);
+    const queryBuilder = this.questionRepository.createQueryBuilder('question')
+      .where('question.deleted_at IS NULL');
 
-    if (examId) query = query.eq('exam_id', examId);
+    if (examId) {
+      queryBuilder.andWhere('question.exam_id = :examId', { examId });
+    }
 
-    const { data, error } = await query;
-    if (error) throw new Error(error.message);
-    return data ?? [];
+    return queryBuilder.getMany();
   }
 
   async findById(id: string): Promise<Question | null> {
-    const { data, error } = await this.supabase.client
-      .from('questions')
-      .select('*')
-      .eq('id', id)
-      .is('deleted_at', null)
-      .single();
-
-    if (error) return null;
-    return data;
+    return this.questionRepository.findOne({
+      where: { id, deleted_at: IsNull() }
+    });
   }
 
   async update(id: string, dto: UpdateQuestionDto): Promise<Question> {
     const question = await this.findById(id);
     if (!question) throw new NotFoundException(`Question ${id} not found`);
 
-    const updated = await this.supabase.update<Question>('questions', id, {
+    Object.assign(question, {
       ...dto,
       type: dto.type as Question['type'],
     });
-    if (!updated) throw new NotFoundException(`Failed to update question ${id}`);
 
-    return updated;
+    return this.questionRepository.save(question);
   }
 
   async softDelete(id: string, deletedBy: string): Promise<Question> {
     const question = await this.findById(id);
     if (!question) throw new NotFoundException(`Question ${id} not found`);
 
-    const deleted = await this.supabase.update<Question>('questions', id, {
-      deleted_at: new Date(),
-      deleted_by: deletedBy,
-    });
+    question.deleted_at = new Date();
+    question.deleted_by = deletedBy;
 
-    if (!deleted) throw new NotFoundException(`Failed to delete question ${id}`);
-    return deleted;
+    return this.questionRepository.save(question);
   }
 }

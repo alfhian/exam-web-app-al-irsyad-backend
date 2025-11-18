@@ -47,25 +47,29 @@ export class UsersController {
   @Get('role')
   async getUsersByRole(
     @Query('role') role: string,
-    @Query('search') search: string = '',
+    @Query('examId') examId?: string,
+    @Query('search') search = '',
     @Query('sort') sort = 'name',
     @Query('order') order: 'asc' | 'desc' = 'asc',
     @Query('page') page = '1',
     @Query('limit') limit = '10',
   ) {
     try {
-      console.log(role);
-      
-      const normalizedRole = role.toUpperCase() as Role; // pastikan match enum
-      console.log(normalizedRole);
-      
+      const normalizedRole = role.toUpperCase() as Role;
+
+      const pageNum = Number(page);
+      const limitNum = Number(limit);
+      const safePage = isNaN(pageNum) || pageNum < 1 ? 1 : pageNum;
+      const safeLimit = isNaN(limitNum) || limitNum < 1 ? 10 : limitNum;
+
       return await this.usersService.getUsersByRole(
         normalizedRole,
         search,
         sort,
         order,
-        Number(page),
-        Number(limit),
+        safePage,
+        safeLimit,
+        examId,
       );
     } catch (error) {
       throw new InternalServerErrorException(error.message);
@@ -150,12 +154,15 @@ export class UsersController {
 
   @Post('generate-password-siswa')
   @Roles(Role.ADMIN)
-  async generatePassword(@Body('password') password: string): Promise<{ updated: number }> {
-    if (!password) {
-      throw new BadRequestException('Missing required fields: password');
-    }
-    const updated = await this.usersService.generatePasswordSiswa(password);
-    return { updated };
+  async generatePasswordSiswa() {
+    const { updated, newPassword } = await this.usersService.generateSamePasswordForAllSiswa();
+    return {
+      message: `Updated ${updated} SISWA passwords`,
+      data: {
+        updated,
+        password: newPassword, // hati-hati meng-expose ini; endpoint harus aman & terbatas admin
+      },
+    };
   }
 
 }
