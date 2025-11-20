@@ -1,99 +1,122 @@
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { ExamStudent } from './entities/exam-student.entity';
+import { Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 @Injectable()
 export class ExamStudentsService {
-  constructor(
-    @InjectRepository(ExamStudent)
-    private readonly examStudentRepo: Repository<ExamStudent>,
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {}
 
+  /* -------------------------------------------------------
+   * GET EXAM STUDENTS
+   * -----------------------------------------------------*/
   async getExamStudents(examId: string) {
-    if (!examId) {
-      throw new Error('examId wajib diisi');
-    }
+    if (!examId) throw new Error('examId wajib diisi');
 
-    return this.examStudentRepo.find({
-      where: { exam_id: examId },
-      relations: ['student'],
-    });
+    const { data, error } = await this.supabase
+      .from('exam_students')
+      .select(`
+        *,
+        student:users (*)
+      `)
+      .eq('exam_id', examId)
+      .is('deleted_at', null);
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
-  
-  /**
-   * Assign students to an exam. studentIds is the full list of selected students for that exam.
-   * createdBy is the user id performing the change.
-   */
+
+  /* -------------------------------------------------------
+   * ASSIGN STUDENTS (INSERT + RESTORE + SOFT-DELETE)
+   * -----------------------------------------------------*/
   async assignStudents(examId: string, studentIds: string[], createdBy: string) {
     if (!examId) throw new Error('examId wajib diisi');
     if (!Array.isArray(studentIds)) studentIds = [];
 
-    // unique dan hati-hati dengan tipe
     const uniqStudentIds = Array.from(new Set(studentIds.map((s) => String(s))));
 
-    // transaction supaya konsisten
-    return await this.examStudentRepo.manager.transaction(async (manager) => {
-      // ambil semua record (termasuk soft-deleted)
-      const existingAll: ExamStudent[] = await manager.find(ExamStudent, {
-        where: { exam_id: examId },
-        withDeleted: true,
-      });
+    /* ======================================================
+     * 1. Get ALL existing rows (INCLUDING deleted)
+     * ====================================================*/
+    const { data: existingAll, error: getErr } = await this.supabase
+      .from('exam_students')
+      .select('*')
+      .eq('exam_id', examId); // supabase already returns soft-deleted
 
-      // maps untuk lookup cepat
-      const existingByStudent = new Map(existingAll.map((e) => [String(e.student_id), e]));
-      const existingActive = existingAll.filter((e) => !e.deleted_at);
+    if (getErr) throw new InternalServerErrorException(getErr.message);
 
-      // 1) Insert baru: student id yang tidak pernah ada di tabel exam_students
-      const toInsert = uniqStudentIds.filter((id) => !existingByStudent.has(id));
+    const existingByStudent = new Map(existingAll.map((e) => [String(e.student_id), e]));
+    const existingActive = existingAll.filter((e) => !e.deleted_at);
 
-      if (toInsert.length > 0) {
-        const rows = toInsert.map((studentId) =>
-          manager.create(ExamStudent, {
-            exam_id: examId,
-            student_id: studentId,
-            created_by: createdBy,
-          }),
-        );
-        await manager.save(rows);
-      }
+    /* ======================================================
+     * 2. INSERT NEW STUDENTS
+     * ====================================================*/
+    const toInsert = uniqStudentIds.filter((id) => !existingByStudent.has(id));
 
-      // 2) Restore: jika ada record soft-deleted dan student id muncul di payload → restore
-      const toRestoreIds = existingAll
-        .filter((e) => e.deleted_at && uniqStudentIds.includes(String(e.student_id)))
-        .map((e) => e.id);
+    if (toInsert.length > 0) {
+      const insertPayload = toInsert.map((sid) => ({
+        exam_id: examId,
+        student_id: sid,
+        created_by: createdBy,
+      }));
 
-      if (toRestoreIds.length > 0) {
-        // restore dengan update (set null) agar TypeORM tetap menganggapnya aktif
-        await manager
-          .createQueryBuilder()
-          .update(ExamStudent)
-          .set({ deleted_at: null, deleted_by: null })
-          .whereInIds(toRestoreIds)
-          .execute();
-      }
+      const { error: insertErr } = await this.supabase
+        .from('exam_students')
+        .insert(insertPayload);
 
-      // 3) Soft-delete: semua record aktif yang tidak ada di payload (uncheck)
-      const toSoftDeleteIds = existingActive
-        .filter((e) => !uniqStudentIds.includes(String(e.student_id)))
-        .map((e) => e.id);
+      if (insertErr) throw new InternalServerErrorException(insertErr.message);
+    }
 
-      if (toSoftDeleteIds.length > 0) {
-        await manager
-          .createQueryBuilder()
-          .update(ExamStudent)
-          .set({ deleted_at: new Date(), deleted_by: createdBy })
-          .whereInIds(toSoftDeleteIds)
-          .execute();
-      }
+    /* ======================================================
+     * 3. RESTORE SOFT-DELETED
+     * ====================================================*/
+    const toRestore = existingAll.filter(
+      (e) => e.deleted_at && uniqStudentIds.includes(String(e.student_id)),
+    );
 
-      // kembalikan daftar aktif terbaru (tidak termasuk soft-deleted)
-      const result = await manager.find(ExamStudent, {
-        where: { exam_id: examId },
-        relations: ['student'],
-      });
+    for (const row of toRestore) {
+      const { error: restoreErr } = await this.supabase
+        .from('exam_students')
+        .update({
+          deleted_at: null,
+          deleted_by: null,
+        })
+        .eq('id', row.id);
 
-      return result;
-    });
+      if (restoreErr) throw new InternalServerErrorException(restoreErr.message);
+    }
+
+    /* ======================================================
+     * 4. SOFT DELETE REMOVED STUDENTS
+     * ====================================================*/
+    const toSoftDelete = existingActive.filter(
+      (e) => !uniqStudentIds.includes(String(e.student_id)),
+    );
+
+    for (const row of toSoftDelete) {
+      const { error: delErr } = await this.supabase
+        .from('exam_students')
+        .update({
+          deleted_at: new Date(),
+          deleted_by: createdBy,
+        })
+        .eq('id', row.id);
+
+      if (delErr) throw new InternalServerErrorException(delErr.message);
+    }
+
+    /* ======================================================
+     * 5. RETURN FRESH ACTIVE LIST
+     * ====================================================*/
+    const { data: finalList, error: listErr } = await this.supabase
+      .from('exam_students')
+      .select(`
+        *,
+        student:users (*)
+      `)
+      .eq('exam_id', examId)
+      .is('deleted_at', null);
+
+    if (listErr) throw new InternalServerErrorException(listErr.message);
+
+    return finalList;
   }
 }

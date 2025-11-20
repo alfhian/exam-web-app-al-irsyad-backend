@@ -14,57 +14,75 @@ import { TeacherExamsService } from './teacher-exam.service';
 @Controller('teacher-exams')
 @UseGuards(AuthGuard('jwt'))
 export class TeacherExamsController {
-  constructor(
-    private readonly teacherExamService: TeacherExamsService,
-  ) {}
+  constructor(private readonly teacherExamService: TeacherExamsService) {}
 
   /**
-   * 🔹 GET /api/teacher-exams
-   * Daftar ujian yang sudah pernah dikerjakan siswa
-   * + Jumlah submission belum discoring (unscored_count)
+   * 🔹 GET /teacher-exams
+   * Daftar ujian yang sudah pernah dikerjakan siswa + unscored_count
    */
   @Get()
   async getSubmittedExams(
-    @Query('search') search?: string,
-    @Query('sort') sort?: string,
+    @Query('search') search = '',
+    @Query('sort') sort = 'created_at',
     @Query('order') order: 'asc' | 'desc' = 'desc',
-    @Query('page') page = 1,
-    @Query('limit') limit = 10,
+    @Query('page') page = '1',
+    @Query('limit') limit = '10',
   ) {
-    return this.teacherExamService.getSubmittedExamsByTeacher(
-      search,
-      sort,
-      order,
-      Number(page),
-      Number(limit),
-    );
+    const pageNumber = Number(page);
+    const limitNumber = Number(limit);
+
+    try {
+      return await this.teacherExamService.getSubmittedExamsByTeacher(
+        search,
+        sort,
+        order,
+        pageNumber,
+        limitNumber,
+      );
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
-  // ✅ Ambil detail jawaban ujian siswa
+  /**
+   * 🔹 GET /teacher-exams/submission/:submissionId
+   * Detail jawaban ujian siswa
+   */
   @Get('submission/:submissionId')
   async getSubmissionDetail(@Param('submissionId') submissionId: string) {
-    return this.teacherExamService.getSubmissionDetail(submissionId);
+    try {
+      return await this.teacherExamService.getSubmissionDetail(submissionId);
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
-  // ✅ Simpan hasil penilaian guru
+  /**
+   * 🔹 PATCH /teacher-exams/submission/:submissionId/scoring
+   * Simpan hasil penilaian guru
+   */
   @Patch('submission/:submissionId/scoring')
   async updateSubmissionScore(
     @Param('submissionId') submissionId: string,
-    @Body()
-    body: {
+    @Body() body: {
       scores: { question_id: string; is_correct: boolean }[];
       totalScore?: number;
     },
   ) {
-    return this.teacherExamService.updateSubmissionScore(
-      submissionId,
-      body.scores,
-      body.totalScore,
-    );
+    try {
+      return await this.teacherExamService.updateSubmissionScore(
+        submissionId,
+        body.scores,
+        body.totalScore,
+      );
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   /**
-   * 🔹 Ambil daftar siswa yang mengerjakan ujian tertentu
+   * 🔹 GET /teacher-exams/:examId/students
+   * Ambil daftar siswa yang mengerjakan ujian tertentu
    */
   @Get(':examId/students')
   async getStudentsByExam(
@@ -73,14 +91,17 @@ export class TeacherExamsController {
     @Query('page') page = '1',
     @Query('limit') limit = '10',
   ) {
+    const pageNumber = Number(page);
+    const limitNumber = Number(limit);
+
     try {
       return await this.teacherExamService.getStudentsByExam(
         examId,
         search,
-        Number(page),
-        Number(limit),
+        pageNumber,
+        limitNumber,
       );
-    } catch (err) {
+    } catch (err: any) {
       throw new InternalServerErrorException(err.message);
     }
   }

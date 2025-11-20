@@ -1,135 +1,156 @@
 import { Injectable, InternalServerErrorException, BadRequestException, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { CreateExamSubmissionDto } from './dto/create-exam-submission.dto';
-import { ExamSubmission } from './entities/exam-submission.entity';
-import { Questionnaire } from 'src/questionnaires/entities/questionnaire.entity';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+export interface CreateExamSubmissionDto {
+  exam_id: string;
+  student_id: string;
+  answers: any[];
+  created_by: string;
+}
 
 @Injectable()
 export class ExamSubmissionService {
-  constructor(
-    @InjectRepository(ExamSubmission)
-    private readonly examSubmissionRepository: Repository<ExamSubmission>,
+  constructor(private readonly supabase: SupabaseClient) {}
 
-    @InjectRepository(Questionnaire)
-    private readonly questionnaireRepository: Repository<Questionnaire>,
-  ) {}
-
+  // ================================
+  // GET SUBMISSIONS BY STUDENT
+  // ================================
   async getSubmittedExamsByStudent(
     studentId: string,
     search: string,
-    sort: string,
-    order: 'asc' | 'desc',
-    page: number,
-    limit: number,
-  ): Promise<{ data: any[]; meta: any }> {
+    sort: string = 'created_at',
+    order: 'asc' | 'desc' = 'asc',
+    page: number = 1,
+    limit: number = 10,
+  ) {
     const offset = (page - 1) * limit;
-    const keyword = search?.trim().toLowerCase();
 
-    const queryBuilder = this.examSubmissionRepository.createQueryBuilder('submission')
-      .leftJoinAndSelect('submission.exam', 'exam')
-      .leftJoinAndSelect('exam.subject', 'subject')
-      .where('submission.student_id = :studentId', { studentId });
+    let query = this.supabase
+      .from('exam_submissions')
+      .select(
+        `
+        *,
+        exam:exams(*, subject:subjects(*))
+      `,
+        { count: 'exact' },
+      )
+      .eq('student_id', studentId);
 
-    if (keyword) {
-      queryBuilder.andWhere(
-        '(LOWER(exam.title) LIKE :keyword OR LOWER(exam.type) LIKE :keyword OR exam.date::text LIKE :keyword OR exam.duration::text LIKE :keyword)',
-        { keyword: `%${keyword}%` }
-      );
+    if (search?.trim()) {
+      query = query.ilike('exam.title', `%${search}%`);
     }
 
-    queryBuilder
-      .orderBy(`submission.${sort || 'created_at'}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(limit);
+    const { data, count, error } = await query
+      .order(sort, { ascending: order === 'asc' })
+      .range(offset, offset + limit - 1);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    if (error) throw new InternalServerErrorException(error.message);
 
     return {
       data,
       meta: {
-        total,
+        total: count || 0,
         page,
         limit,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil((count || 0) / limit),
       },
     };
   }
 
-  async getSubmissionDetail(submissionId: string, studentId: string) {
-    const submission = await this.examSubmissionRepository.findOne({
-      where: { id: submissionId, student_id: studentId },
-      relations: ['exam', 'exam.subject'],
-    });
+  // ================================
+  // GET SINGLE SUBMISSION DETAIL
+  // ================================
+  async getSubmissionDetail(submissionId: string, studentId?: string) {
+    let query = this.supabase
+      .from('exam_submissions')
+      .select(
+        `
+        *,
+        exam:exams(*, subject:subjects(*))
+      `
+      )
+      .eq('id', submissionId);
 
-    if (!submission) {
-      throw new NotFoundException('Submission tidak ditemukan.');
-    }
+    if (studentId) query = query.eq('student_id', studentId);
 
-    const answerList = submission.answers || [];
+    const { data, error } = await query.single();
 
-    // Ambil semua question_id unik dari jawaban
-    const questionIds = [...new Set(answerList.map((a) => a.question_id))];
+    if (error || !data) throw new NotFoundException('Submission tidak ditemukan');
 
-    // Ambil semua pertanyaan terkait dari tabel questionnaire
-    const questions = await this.questionnaireRepository.findBy({
-      id: questionIds.length > 0 ? In(questionIds) : undefined,
-    });
+    const answerList = data.answers || [];
 
-    // Gabungkan pertanyaan dengan jawaban
-    const answersWithQuestions = answerList.map((a) => ({
+    if (!answerList.length) return data;
+
+    // Ambil semua question_id unik
+    const questionIds = Array.from(new Set(answerList.map((a) => a.question_id)));
+
+    if (questionIds.length === 0) return data;
+
+    // Ambil pertanyaan terkait dari tabel questionnaire
+    const { data: questions, error: qError } = await this.supabase
+      .from('questionnaires')
+      .select('*')
+      .in('id', questionIds);
+
+    if (qError) throw new InternalServerErrorException(qError.message);
+
+    // Gabungkan jawaban dengan pertanyaan
+    data.answers = answerList.map((a) => ({
       ...a,
       question: questions.find((q) => q.id === a.question_id) || null,
     }));
 
-    return {
-      ...submission,
-      answers: answersWithQuestions,
-    };
+    return data;
   }
 
+  // ================================
+  // CHECK IF SUBMITTED
+  // ================================
+  async hasSubmitted(examId: string, studentId: string) {
+    const { count, error } = await this.supabase
+      .from('exam_submissions')
+      .select('id')
+      .eq('exam_id', examId)
+      .eq('student_id', studentId);
 
-  async hasSubmitted(examId: string, studentId: string): Promise<{ submitted: boolean }> {
-    try {
-      const submission = await this.examSubmissionRepository.findOne({
-        where: { exam_id: examId, student_id: studentId },
-        select: ['id']
-      });
-
-      return { submitted: !!submission };
-    } catch (err) {
-      throw new InternalServerErrorException(err.message);
-    }
+    if (error) throw new InternalServerErrorException(error.message);
+    
+    return { submitted: (count || 0) > 0 };
   }
 
-  async submit(dto: CreateExamSubmissionDto): Promise<ExamSubmission> {
+  // ================================
+  // SUBMIT EXAM
+  // ================================
+  async submit(dto: CreateExamSubmissionDto) {
     const { exam_id, student_id, answers, created_by } = dto;
 
-    console.log('📦 body.answers isArray?', Array.isArray(answers));
-    // basic validation
     if (!exam_id) throw new BadRequestException('exam_id is required');
     if (!student_id) throw new BadRequestException('student_id is required');
-    if (!Array.isArray(answers))
-      throw new BadRequestException('answers must be an array');
+    if (!Array.isArray(answers)) throw new BadRequestException('answers must be an array');
 
-    // Check existing submissions
-    const existing = await this.examSubmissionRepository.findOne({
-      where: { exam_id, student_id },
-      select: ['id']
-    });
+    // Check existing submission
+    const { count, error: existingError } = await this.supabase
+      .from('exam_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('exam_id', exam_id)
+      .eq('student_id', student_id)
 
-    if (existing) {
-      throw new BadRequestException('Anda sudah pernah mengirimkan jawaban untuk ujian ini.');
-    }
+    console.log(existingError);
+    
 
-    // Create new submission
-    const submission = this.examSubmissionRepository.create({
-      exam_id,
-      student_id,
-      answers,
-      created_by,
-    });
+    if (existingError) throw new InternalServerErrorException(existingError.message);
+    if (count && count > 0)
+      throw new BadRequestException('Anda sudah mengirimkan jawaban untuk ujian ini.');
 
-    return this.examSubmissionRepository.save(submission);
+    // Insert new submission
+    const { data, error } = await this.supabase
+      .from('exam_submissions')
+      .insert({ exam_id, student_id, answers, created_by })
+      .select('*')
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+
+    return data;
   }
 }

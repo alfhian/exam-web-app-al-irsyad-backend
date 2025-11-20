@@ -1,13 +1,12 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { QuestionnaireService } from './questionnaire.service';
 import { QuestionnaireController } from './questionnaire.controller';
-import { Questionnaire } from './entities/questionnaire.entity';
+import { SupabaseModule } from '../supabase/supabase.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Questionnaire])],
+  imports: [SupabaseModule],
   providers: [QuestionnaireService],
   exports: [QuestionnaireService],
-  controllers: [QuestionnaireController]
+  controllers: [QuestionnaireController],
 })
 export class QuestionnaireModule {}

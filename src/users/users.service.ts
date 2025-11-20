@@ -1,157 +1,183 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
-import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, Like, ILike, IsNull, DataSource } from 'typeorm';
-import { User } from './entities/user.entity';
+import { Injectable, NotFoundException, Logger, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 import * as bcrypt from 'bcrypt';
-import { Role } from 'src/common/enums/role.enum';
-import { Exam } from 'src/exams/entities/exam.entity';
+import { User } from './entities/user.entity';
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
-  constructor(
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
-    @InjectDataSource()
-    private readonly dataSource: DataSource
-  ) {}
 
+  constructor(private readonly supabase: SupabaseClient) {}
+
+  // CREATE USER
   async createUser(user: Partial<User>): Promise<User> {
     delete user.id;
-    console.log(user);
 
-    // Bersihkan string kosong
-    Object.keys(user).forEach(key => {
-      if (user[key] === "") {
-        user[key] = null;
-      }
+    Object.keys(user).forEach((key) => {
+      if (user[key] === '') user[key] = null;
     });
-    
-    const newUser = this.userRepository.create(user);
-    return this.userRepository.save(newUser);
+
+    const { data, error } = await this.supabase
+      .from('users')
+      .insert(user)
+      .select('*')
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
+  // PAGINATION
   async getUsersWithPagination(
     search: string,
     sort: string,
     order: 'asc' | 'desc',
     page: number,
-    limit: number
-  ): Promise<{ data: User[]; meta: any }> {
+    limit: number,
+  ) {
     const offset = (page - 1) * limit;
-    const keyword = search.trim().toLowerCase();
 
-    const queryBuilder = this.userRepository.createQueryBuilder('user')
-      .where('user.deleted_at IS NULL');
+    let query = this.supabase
+      .from('users')
+      .select('*', { count: 'exact' })
+      .is('deleted_at', null);
 
-    if (keyword) {
-      queryBuilder.andWhere(
-        '(LOWER(user.name) LIKE :keyword OR LOWER(user.role) LIKE :keyword OR LOWER(user.userid) LIKE :keyword)',
-        { keyword: `%${keyword}%` }
-      );
+    if (search.trim()) {
+      query = query.ilike('name', `%${search}%`);
     }
 
-    queryBuilder
-      .orderBy(`user.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(limit);
+    const { data, error, count } = await query
+      .order(sort, { ascending: order === 'asc' })
+      .range(offset, offset + limit - 1);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    if (error) throw new InternalServerErrorException(error.message);
 
     return {
       data,
       meta: {
-        total,
+        total: count || 0,
         page,
         limit,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil((count || 0) / limit),
       },
     };
   }
 
-  async getAllUsers(): Promise<User[]> {
-    return this.userRepository.find({
-      where: { deleted_at: IsNull() },
-      order: { is_active: 'DESC', name: 'ASC' }
-    });
+  // ALL USERS
+  async getAllUsers() {
+    const { data, error } = await this.supabase
+      .from('users')
+      .select('*')
+      .is('deleted_at', null)
+      .order('is_active', { ascending: false })
+      .order('name', { ascending: true });
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
-  async getUserByNisNik(userid: string | number): Promise<User | null> {
-    return this.userRepository.findOne({
-      where: { userid: String(userid), deleted_at: IsNull() }
-    });
+  // USER BY NIS/NIK
+  async getUserByNisNik(userid: string | number) {
+    const { data, error } = await this.supabase
+      .from('users')
+      .select('*')
+      .eq('userid', String(userid))
+      .is('deleted_at', null)
+      .single();
+
+    console.log(error);
+    
+
+    if (error) return null;
+    return data;
   }
 
-  async getUserById(id: string | number): Promise<User | null> {
-    return this.userRepository.findOne({
-      where: { id: String(id), deleted_at: IsNull() }
-    });
+  // USER BY ID
+  async getUserById(id: string | number) {
+    const { data } = await this.supabase
+      .from('users')
+      .select('*')
+      .eq('id', String(id))
+      .is('deleted_at', null)
+      .single();
+
+    return data || null;
   }
 
-  async updateUserStatus(id: string | number, isActive: boolean, updatedAt: Date, updatedBy: string): Promise<User> {
-    const user = await this.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
+  // UPDATE USER ACTIVE
+  async updateUserStatus(
+    id: string,
+    isActive: boolean,
+    updatedAt: Date,
+    updatedBy: string,
+  ) {
+    const { data, error } = await this.supabase
+      .from('users')
+      .update({
+        is_active: isActive,
+        updated_at: updatedAt,
+        updated_by: updatedBy,
+      })
+      .eq('id', id)
+      .select('*')
+      .single();
 
-    user.is_active = isActive;
-    user.updated_at = updatedAt;
-    user.updated_by = updatedBy;
-
-    return this.userRepository.save(user);
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
-  async updateUser(id: string | number, body: Partial<User>): Promise<User> {
-    const user = await this.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
+  // UPDATE USER
+  async updateUser(id: string, update: Partial<User>) {
+    const { data, error } = await this.supabase
+      .from('users')
+      .update(update)
+      .eq('id', id)
+      .select('*')
+      .single();
 
-    Object.assign(user, body);
-    return this.userRepository.save(user);
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
+  // RANDOM STRING
   private generateRandomString(length = 8): string {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+    return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
   }
 
-  /**
-   * Generate one random password, set ALL SISWA to that password (hashed),
-   * and return the plain new password and updated count.
-   */
-  async generateSamePasswordForAllSiswa(): Promise<{ updated: number; newPassword: string }> {
-    // 1) generate plain password
+  // RESET ALL SISWA PASSWORD
+  async generateSamePasswordForAllSiswa() {
     const rawPassword = `SISWA-${this.generateRandomString(8)}`;
-
-    // 2) hash it
     const hashed = bcrypt.hashSync(rawPassword, 10);
 
-    // 3) update all SISWA using query builder for efficiency
-    const result = await this.userRepository
-      .createQueryBuilder()
-      .update(User)
-      .set({ password: hashed })
-      .where('role = :role', { role: 'SISWA' })
-      .andWhere('deleted_at IS NULL')
-      .execute();
+    // UPDATE PASSWORDS
+    const { error: updateError } = await this.supabase
+      .from('users')
+      .update({ password: hashed })
+      .eq('role', 'SISWA')
+      .is('deleted_at', null);
 
-    const affected = result.affected ?? 0;
+    if (updateError) throw new InternalServerErrorException(updateError.message);
 
-    if (affected === 0) {
-      throw new NotFoundException('No SISWA users found to update');
-    }
+    // COUNT SISWA
+    const { count, error: countError } = await this.supabase
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('role', 'SISWA')
+      .is('deleted_at', null);
 
-    // ⚠️ Jangan log password plain di production; hanya untuk debugging lokal jika perlu
-    this.logger.log(`Updated ${affected} SISWA passwords to SAME new password`);
+    if (countError) throw new InternalServerErrorException(countError.message);
+    if (!count) throw new NotFoundException('No SISWA users found to update');
 
-    return { updated: affected, newPassword: rawPassword };
+    this.logger.log(`Updated ${count} SISWA passwords to SAME new password`);
+
+    return {
+      updated: count,
+      password: rawPassword,
+    };
   }
 
+  // USERS BY ROLE
   async getUsersByRole(
     role: string,
     search: string,
@@ -161,58 +187,54 @@ export class UsersService {
     limit: number,
     examId?: string,
   ) {
-    const safePage = Number.isFinite(page) && page > 0 ? page : 1;
-    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 10;
-    const offset = (safePage - 1) * safeLimit;
-    const normalizedRole = role.toUpperCase();
+    const offset = (page - 1) * limit;
 
     let classId: string | null = null;
 
-    // ✅ Ambil class_id dari relasi Exam → Subject
+    // FETCH CLASS ID FROM EXAM (FIXED)
     if (examId) {
-      const examWithSubject = await this.dataSource
-        .getRepository(Exam)
-        .createQueryBuilder('exam')
-        .leftJoinAndSelect('exam.subject', 'subject')
-        .select(['exam.id', 'subject.class_id'])
-        .where('exam.id = :examId', { examId })
-        .getOne();
+      const { data: exam } = await this.supabase
+        .from('exams')
+        .select(
+          `
+          id,
+          subjects (
+            class_id
+          )
+        `,
+        )
+        .eq('id', examId)
+        .single();
 
-      if (examWithSubject?.subject?.class_id) {
-        classId = examWithSubject.subject.class_id;
-      }
+      classId = exam?.subjects?.[0]?.class_id ?? null;
+
     }
 
-    // ✅ Query user berdasarkan role, optional search dan class filter
-    const queryBuilder = this.userRepository
-      .createQueryBuilder('user')
-      .select(['user.id', 'user.name', 'user.role', 'user.userid', 'user.class_id', 'user.class_name'])
-      .where('user.role = :role', { role: normalizedRole })
-      .andWhere('user.deleted_at IS NULL')
-      .orderBy(`user.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(safeLimit);
+    let query = this.supabase
+      .from('users')
+      .select('*', { count: 'exact' })
+      .eq('role', role)
+      .is('deleted_at', null);
 
-    if (search && search.trim() !== '') {
-      queryBuilder.andWhere('LOWER(user.name) LIKE :search', {
-        search: `%${search.trim().toLowerCase()}%`,
-      });
+    if (search.trim()) {
+      query = query.ilike('name', `%${search}%`);
     }
 
-    // ✅ Filter berdasarkan class_id dari subject (jika ditemukan)
     if (classId) {
-      queryBuilder.andWhere('user.class_id = :classId', { classId });
+      query = query.eq('class_id', classId);
     }
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    const { data, error, count } = await query
+      .order(sort, { ascending: order === 'asc' })
+      .range(offset, offset + limit - 1);
+
+    if (error) throw new InternalServerErrorException(error.message);
 
     return {
       data,
-      total,
-      page: safePage,
-      limit: safeLimit,
+      total: count,
+      page,
+      limit,
     };
   }
-
-
 }

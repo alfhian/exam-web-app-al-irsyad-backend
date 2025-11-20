@@ -1,20 +1,26 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { Subject } from './entities/subject.entity';
 import { CreateSubjectDto } from './dto/create-subject.dto';
 import { UpdateSubjectDto } from './dto/update-subject.dto';
 
 @Injectable()
 export class SubjectService {
-  constructor(
-    @InjectRepository(Subject)
-    private readonly subjectRepository: Repository<Subject>
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {}
 
   async create(dto: CreateSubjectDto): Promise<Subject> {
-    const subject = this.subjectRepository.create(dto);
-    return this.subjectRepository.save(subject);
+    try {
+      const { data, error } = await this.supabase
+        .from('subjects')
+        .insert([{ ...dto }])
+        .select()
+        .single();
+
+      if (error) throw new InternalServerErrorException(error.message);
+      return data!;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   async getDataWithPagination(
@@ -24,72 +30,106 @@ export class SubjectService {
     page: number,
     limit: number
   ): Promise<{ data: Subject[]; meta: any }> {
-    const offset = (page - 1) * limit;
-    const keyword = search.trim().toLowerCase();
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    const queryBuilder = this.subjectRepository.createQueryBuilder('subject')
-      .where('subject.deleted_at IS NULL');
+    try {
+      let query = this.supabase
+        .from('subjects')
+        .select('*', { count: 'exact' })
+        .is('deleted_at', null);
 
-    if (keyword) {
-      queryBuilder.andWhere(
-        '(LOWER(subject.name) LIKE :keyword OR LOWER(subject.description) LIKE :keyword)',
-        { keyword: `%${keyword}%` }
-      );
+      if (search?.trim()) {
+        const keyword = `%${search.trim().toLowerCase()}%`;
+        query = query.or(`ilike(name,${keyword}),ilike(description,${keyword})`);
+      }
+
+      query = query.order(sort, { ascending: order === 'asc' }).range(from, to);
+
+      const { data, count, error } = await query;
+
+      if (error) throw new InternalServerErrorException(error.message);
+
+      return {
+        data: data || [],
+        meta: {
+          total: count || 0,
+          page,
+          limit,
+          totalPages: Math.ceil((count || 0) / limit),
+        },
+      };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
     }
-
-    queryBuilder
-      .orderBy(`subject.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(limit);
-
-    const [data, total] = await queryBuilder.getManyAndCount();
-
-    return {
-      data,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
   }
 
   async getDataOnly(): Promise<{ data: Subject[]; meta: any }> {
-    const data = await this.subjectRepository.find({
-      where: { deleted_at: IsNull() },
-      order: { class_id: 'ASC', name: 'ASC' }
-    });
+    try {
+      const { data, error } = await this.supabase
+        .from('subjects')
+        .select('*')
+        .is('deleted_at', null)
+        .order('class_id', { ascending: true })
+        .order('name', { ascending: true });
 
-    return {
-      data,
-      meta: {
-        total: data.length,
-      },
-    };
+      if (error) throw new InternalServerErrorException(error.message);
+
+      return {
+        data: data || [],
+        meta: { total: data?.length || 0 },
+      };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
-  async findById(id: string): Promise<Subject | null> {
-    return this.subjectRepository.findOne({
-      where: { id, deleted_at: IsNull() }
-    });
+  async findById(id: string): Promise<Subject> {
+    try {
+      const { data, error } = await this.supabase
+        .from('subjects')
+        .select('*')
+        .is('deleted_at', null)
+        .eq('id', id)
+        .single();
+
+      if (error || !data) throw new NotFoundException(`Subject ${id} not found`);
+
+      return data;
+    } catch (err: any) {
+      throw new NotFoundException(err.message);
+    }
   }
 
-  async update(id: string, dto: UpdateSubjectDto): Promise<Subject> {
-    const subject = await this.findById(id);
-    if (!subject) throw new NotFoundException(`Subject ${id} not found`);
+  async update(id: string, dto: UpdateSubjectDto & { updated_by?: string }): Promise<Subject> {
+    try {
+      const { data, error } = await this.supabase
+        .from('subjects')
+        .update({ ...dto, updated_at: new Date() })
+        .eq('id', id)
+        .select()
+        .single();
 
-    Object.assign(subject, dto);
-    return this.subjectRepository.save(subject);
+      if (error || !data) throw new NotFoundException(`Subject ${id} not found`);
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   async softDelete(id: string, deletedBy: string): Promise<Subject> {
-    const subject = await this.findById(id);
-    if (!subject) throw new NotFoundException(`Subject ${id} not found`);
+    try {
+      const { data, error } = await this.supabase
+        .from('subjects')
+        .update({ deleted_at: new Date(), deleted_by: deletedBy })
+        .eq('id', id)
+        .select()
+        .single();
 
-    subject.deleted_at = new Date();
-    subject.deleted_by = deletedBy;
-
-    return this.subjectRepository.save(subject);
+      if (error || !data) throw new NotFoundException(`Subject ${id} not found`);
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 }

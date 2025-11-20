@@ -8,9 +8,8 @@ import {
   NotFoundException,
   BadRequestException,
   Query,
-  InternalServerErrorException,
-  UseGuards, 
-  Req
+  UseGuards,
+  Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { UsersService } from './users.service';
@@ -18,32 +17,36 @@ import { User } from './entities/user.entity';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { Role } from 'src/common/enums/role.enum';
-import { RolesGuard } from 'src/common/guards/roles.guard';
 
 @Controller('users')
 @UseGuards(AuthGuard('jwt'))
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  // users.controller.ts
+  // ============================
+  // PAGINATION USERS
+  // ============================
   @Get()
   @Roles(Role.ADMIN)
-   async getUsers(
-    @Query('search') search: string = '',
+  async getUsers(
+    @Query('search') search = '',
     @Query('sort') sort = 'name',
     @Query('order') order: 'asc' | 'desc' = 'asc',
     @Query('page') page = '1',
-    @Query('limit') limit = '10'
+    @Query('limit') limit = '10',
   ) {
-    try {
-      return await this.usersService.getUsersWithPagination(search, sort, order, Number(page), Number(limit));
-    } catch (error) {
-      throw new InternalServerErrorException(error.message);
-    }
+    return this.usersService.getUsersWithPagination(
+      search,
+      sort,
+      order,
+      Number(page),
+      Number(limit),
+    );
   }
 
-
-  // users.controller.ts
+  // ============================
+  // GET USERS BY ROLE
+  // ============================
   @Get('role')
   async getUsersByRole(
     @Query('role') role: string,
@@ -54,47 +57,41 @@ export class UsersController {
     @Query('page') page = '1',
     @Query('limit') limit = '10',
   ) {
-    try {
-      const normalizedRole = role.toUpperCase() as Role;
-
-      const pageNum = Number(page);
-      const limitNum = Number(limit);
-      const safePage = isNaN(pageNum) || pageNum < 1 ? 1 : pageNum;
-      const safeLimit = isNaN(limitNum) || limitNum < 1 ? 10 : limitNum;
-
-      return await this.usersService.getUsersByRole(
-        normalizedRole,
-        search,
-        sort,
-        order,
-        safePage,
-        safeLimit,
-        examId,
-      );
-    } catch (error) {
-      throw new InternalServerErrorException(error.message);
+    if (!role) {
+      throw new BadRequestException('role query param is required');
     }
+
+    return this.usersService.getUsersByRole(
+      role.toUpperCase(),
+      search,
+      sort,
+      order,
+      Number(page),
+      Number(limit),
+      examId,
+    );
   }
 
-
+  // ============================
+  // GET USER BY ID
+  // ============================
   @Get(':id')
-  async findOne(@Param('id') id: string): Promise<User> {
-    console.log('testtt');
-    
+  async findOne(@Param('id') id: string) {
     const user = await this.usersService.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
+    if (!user) throw new NotFoundException(`User ${id} not found`);
     return user;
   }
 
+  // ============================
+  // CREATE USER
+  // ============================
   @Post()
   @Roles(Role.ADMIN)
-  async create(@Body() body: Partial<User>, @Req() req: Request): Promise<User> {
-    const createdBy = (req as any).user['sub'];
+  async create(@Body() body: Partial<User>, @Req() req: Request) {
+    const createdBy = (req as any)?.user?.sub ?? null;
 
     if (!body.name || !body.userid || !body.role) {
-      throw new BadRequestException('Missing required fields: name, userid, or role');
+      throw new BadRequestException('Missing required fields');
     }
 
     return this.usersService.createUser({
@@ -103,66 +100,46 @@ export class UsersController {
     });
   }
 
-  @Put('siswa/:id')
-  @Roles(Role.ADMIN)
-  async updateSiswa(
-    @Param('id') id: string,
-    @Body() body: Partial<User>,
-    @Req() req: Request
-  ): Promise<User> {
-    const updatedBy = (req as any).user['sub'];
-    const user = await this.usersService.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
-
-    return this.usersService.updateUser(id, {...body, updated_by: updatedBy});
-  }
-
+  // ============================
+  // UPDATE USER
+  // ============================
   @Put(':id')
   @Roles(Role.ADMIN)
   async update(
     @Param('id') id: string,
     @Body() body: Partial<User>,
-    @Req() req: Request
-  ): Promise<User> {
-    const updatedBy = (req as any).user['sub'];
-    const user = await this.usersService.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
+    @Req() req: Request,
+  ) {
+    const updatedBy = (req as any)?.user?.sub ?? null;
 
-    return this.usersService.updateUser(id, {...body, updated_by: updatedBy});
+    return this.usersService.updateUser(id, {
+      ...body,
+      updated_by: updatedBy,
+    });
   }
 
+  // ============================
+  // UPDATE USER STATUS
+  // ============================
   @Put(':id/status')
   @Roles(Role.ADMIN)
   async updateStatus(
     @Param('id') id: string,
     @Body('is_active') isActive: boolean,
     @Body('updated_at') updatedAt: Date,
-    @Req() req: Request
-  ): Promise<User> {
-    const updatedBy = (req as any).user['sub'];
-    const user = await this.usersService.getUserById(id);
-    if (!user) {
-      throw new NotFoundException(`User with ID ${id} not found`);
-    }
+    @Req() req: Request,
+  ) {
+    const updatedBy = (req as any)?.user?.sub ?? null;
 
     return this.usersService.updateUserStatus(id, isActive, updatedAt, updatedBy);
   }
 
+  // ============================
+  // GENERATE NEW PASSWORD FOR ALL SISWA
+  // ============================
   @Post('generate-password-siswa')
   @Roles(Role.ADMIN)
   async generatePasswordSiswa() {
-    const { updated, newPassword } = await this.usersService.generateSamePasswordForAllSiswa();
-    return {
-      message: `Updated ${updated} SISWA passwords`,
-      data: {
-        updated,
-        password: newPassword, // hati-hati meng-expose ini; endpoint harus aman & terbatas admin
-      },
-    };
+    return this.usersService.generateSamePasswordForAllSiswa();
   }
-
 }

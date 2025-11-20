@@ -1,13 +1,13 @@
+// src/users/users.module.ts
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
-import { User } from './entities/user.entity';
+import { SupabaseModule } from '../supabase/supabase.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User])],
+  imports: [SupabaseModule],
   providers: [UsersService],
-  exports: [UsersService],
-  controllers: [UsersController]
+  controllers: [UsersController],
+  exports: [UsersService], // ⚠️ wajib export biar bisa di-import module lain
 })
 export class UsersModule {}

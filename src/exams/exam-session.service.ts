@@ -1,97 +1,203 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
-import { randomUUID } from 'crypto';
-import * as ffmpeg from 'fluent-ffmpeg';
-import * as fs from 'fs';
-import * as path from 'path';
-import { ExamSession } from './entities/exam-session.entity';
-import { ExamSubmission } from './entities/exam-submission.entity';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from "@nestjs/common";
+import { SupabaseClient } from "@supabase/supabase-js";
+import * as fs from "fs";
+import * as path from "path";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
+import ffprobePath from "ffprobe-static";
+import { randomUUID } from "crypto";
 
 @Injectable()
 export class ExamSessionService {
-  constructor(
-    @InjectRepository(ExamSession)
-    private readonly examSessionRepository: Repository<ExamSession>,
-    private readonly dataSource: DataSource,
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {
+    // Set binary FFmpeg & FFprobe
+    ffmpeg.setFfmpegPath(ffmpegPath);
+    ffmpeg.setFfprobePath(ffprobePath.path);
+  }
 
+  /* -------------------------------------------------------
+   *  START EXAM SESSION
+   * -----------------------------------------------------*/
   async startSession(examId: string, studentId: string) {
-    const session = this.examSessionRepository.create({
-      exam_id: examId,
-      student_id: studentId,
-    });
-    return this.examSessionRepository.save(session);
+    const { data, error } = await this.supabase
+      .from("exam_sessions")
+      .insert({
+        exam_id: examId,
+        student_id: studentId,
+      })
+      .select()
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
+  /* -------------------------------------------------------
+   *  INCREMENT TAB SWITCH
+   * -----------------------------------------------------*/
   async incrementTabSwitch(sessionId: string) {
-    const session = await this.examSessionRepository.findOne({ where: { id: sessionId } });
-    if (!session) throw new Error('Session not found');
+    const { data: session, error: getErr } = await this.supabase
+      .from("exam_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .single();
 
-    session.tab_switch_count = (session.tab_switch_count || 0) + 1;
-    return this.examSessionRepository.save(session);
+    if (getErr || !session) throw new NotFoundException("Session not found");
+
+    const newCount = (session.tab_switch_count || 0) + 1;
+
+    const { data, error } = await this.supabase
+      .from("exam_sessions")
+      .update({ tab_switch_count: newCount })
+      .eq("id", sessionId)
+      .select()
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
+  /* -------------------------------------------------------
+   *  FINISH SESSION
+   * -----------------------------------------------------*/
   async finishSession(sessionId: string) {
-    const session = await this.examSessionRepository.findOne({ where: { id: sessionId } });
-    if (!session) throw new Error(`Session dengan id ${sessionId} tidak ditemukan`);
+    const { data, error } = await this.supabase
+      .from("exam_sessions")
+      .update({
+        finished: true,
+        finished_at: new Date(),
+      })
+      .eq("id", sessionId)
+      .select()
+      .single();
 
-    session.finished = true;
-    return this.examSessionRepository.save(session);
+    if (error) throw new InternalServerErrorException(error.message);
+    return data;
   }
 
-  async uploadVideo(sessionId: string, file: Express.Multer.File, user?: any) {
+  /* -------------------------------------------------------
+   *  UPLOAD & COMPRESS VIDEO
+   * -----------------------------------------------------*/
+  async uploadVideo(sessionId: string, file: Express.Multer.File, user: any) {
     try {
-      if (!file) throw new InternalServerErrorException('No file uploaded');
+      if (!file)
+        throw new InternalServerErrorException("No file uploaded");
 
-      const uploadDir = path.resolve('uploads', 'recordings');
-      if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+      // Create folder
+      const uploadDir = path.resolve("uploads", "exam-recordings");
+      if (!fs.existsSync(uploadDir))
+        fs.mkdirSync(uploadDir, { recursive: true });
 
-      const rawFile = path.join(uploadDir, `raw-${sessionId}-${randomUUID()}.webm`);
+      // Save RAW
+      const rawFile = path.join(
+        uploadDir,
+        `raw-${sessionId}-${randomUUID()}.webm`
+      );
       await fs.promises.writeFile(rawFile, file.buffer);
 
-      const compressedFileName = `session-${sessionId}-${randomUUID()}.mp4`;
-      const compressedFilePath = path.join(uploadDir, compressedFileName);
+      // Prepare compressed path
+      const compressedName = `session-${sessionId}-${Date.now()}.mp4`;
+      const compressedPath = path.join(uploadDir, compressedName);
 
-      console.log('🎬 Compressing video...');
+      /* =========================================
+       * COMPRESS USING FFMPEG-STATIC
+       * =========================================*/
       await new Promise((resolve, reject) => {
         ffmpeg(rawFile)
           .outputOptions([
-            '-vcodec libx264',
-            '-preset veryfast',
-            '-crf 28',       // quality–size balance (lower = better quality)
-            '-b:a 96k',
-            '-vf scale=640:-1',
+            "-vcodec libx264",
+            "-preset veryfast",
+            "-crf 28",
+            "-b:a 96k",
+            "-vf scale=640:-1",
           ])
-          .save(compressedFilePath)
-          .on('end', resolve)
-          .on('error', reject);
+          .save(compressedPath)
+          .on("end", resolve)
+          .on("error", reject);
       });
 
-      // 🧹 Hapus file mentah
-      fs.unlinkSync(rawFile);
+      fs.unlinkSync(rawFile); // remove raw
 
-      // 🗄️ Simpan metadata di DB
-      const submissionRepo = this.dataSource.getRepository(ExamSubmission);
-      const submission = await submissionRepo.findOne({ where: { exam_id: sessionId } });
+      /* =========================================
+       * GET exam_id FROM exam_sessions
+       * =========================================*/
+      const { data: session, error: sErr } = await this.supabase
+        .from("exam_sessions")
+        .select("exam_id")
+        .eq("id", sessionId)
+        .single();
+
+      if (sErr || !session)
+        throw new InternalServerErrorException("Session not found");
+
+      /* =========================================
+       * UPLOAD TO SUPABASE STORAGE
+       * =========================================*/
+      const fileBuffer = await fs.promises.readFile(compressedPath);
+      const uint8 = new Uint8Array(fileBuffer);
+
+      const storagePath = `session-recordings/${compressedName}`;
+
+      const { error: uploadErr } = await this.supabase.storage
+        .from("exam-recordings")
+        .upload(storagePath, uint8, {
+          contentType: "video/mp4",
+          upsert: true,
+        });
+
+      if (uploadErr)
+        throw new InternalServerErrorException(uploadErr.message);
+
+      const publicUrl = this.supabase.storage
+        .from("exam-recordings")
+        .getPublicUrl(storagePath).data.publicUrl;
+
+      fs.unlinkSync(compressedPath); // clear local
+
+      /* =========================================
+       * UPDATE / INSERT exam_submissions
+       * =========================================*/
+      const { data: submission } = await this.supabase
+        .from("exam_submissions")
+        .select("*")
+        .eq("session_id", sessionId)
+        .single();
+
       if (submission) {
-        submission.file_name = compressedFileName;
-        submission.file_path = `/uploads/recordings/${compressedFileName}`;
-        submission.updated_by = user?.id || null;
-        submission.updated_at = new Date();
-        await submissionRepo.save(submission);
+        await this.supabase
+          .from("exam_submissions")
+          .update({
+            file_name: compressedName,
+            file_url: publicUrl,
+            updated_by: user?.sub,
+            updated_at: new Date(),
+          })
+          .eq("id", submission.id);
+      } else {
+        await this.supabase.from("exam_submissions").insert({
+          session_id: sessionId,
+          exam_id: session.exam_id,
+          file_name: compressedName,
+          file_url: publicUrl,
+          created_by: user?.sub,
+        });
       }
 
       return {
         success: true,
-        fileName: compressedFileName,
-        fileUrl: `/uploads/recordings/${compressedFileName}`,
-        message: '✅ Video uploaded & compressed successfully',
+        fileName: compressedName,
+        fileUrl: publicUrl,
+        message: "Video uploaded & compressed successfully",
       };
     } catch (err) {
-      console.error('❌ Video compression failed:', err);
-      throw new InternalServerErrorException('Failed to upload or compress video');
+      console.error("UPLOAD ERROR:", err);
+      throw new InternalServerErrorException(
+        "Failed to upload or compress video"
+      );
     }
   }
-
 }

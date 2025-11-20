@@ -17,11 +17,11 @@ import { getDatabaseConfig } from './config/database.config';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: getDatabaseConfig,
-      inject: [ConfigService],
-    }),
+    // TypeOrmModule.forRootAsync({
+    //   imports: [ConfigModule],
+    //   useFactory: getDatabaseConfig,
+    //   inject: [ConfigService],
+    // }),
     AuthModule,
     UsersModule,
     ExamModule,

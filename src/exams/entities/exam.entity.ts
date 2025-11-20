@@ -1,63 +1,24 @@
-import { 
-  Entity, 
-  PrimaryGeneratedColumn, 
-  Column, 
-  ManyToOne, 
-  OneToMany,
-  CreateDateColumn,
-  UpdateDateColumn,
-  DeleteDateColumn,
-  JoinColumn
-} from 'typeorm';
-import { Subject } from '../../subjects/entities/subject.entity';
-import { Question } from '../../questions/entities/question.entity';
-import { Questionnaire } from '../../questionnaires/entities/questionnaire.entity';
-
-@Entity("exams")
 export class Exam {
-  @PrimaryGeneratedColumn('uuid')
   id: string;
-
-  @Column()
   title: string;
+  date: string; // tetap string, sesuai DB
 
-  @Column({ type: 'timestamp' })
-  date: Date;
-
-  @Column()
   type: string;
+  duration: number;
+  notes?: string | null; // bisa null dari DB
 
-  @Column()
-  duration: number; // in minutes
-
-  @Column({ type: 'text', nullable: true })
-  notes?: string;
-
-  @CreateDateColumn()
-  created_at: Date;
-
-  @Column({ length: 100 })
+  created_at: string; // atau Date kalau mau konversi manual
   created_by: string;
 
-  @UpdateDateColumn({ nullable: true })
-  updated_at?: Date;
+  updated_at?: string | null;
+  updated_by?: string | null;
 
-  @Column({ length: 100, nullable: true })
-  updated_by?: string;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
 
-  @DeleteDateColumn({ nullable: true })
-  deleted_at?: Date;
-
-  @Column({ length: 100, nullable: true })
-  deleted_by?: string;
-
-  @Column({ type: 'uuid' })
   subject_id: string;
 
-  @ManyToOne(() => Subject, subject => subject.exams)
-  @JoinColumn({ name: 'subject_id' })
-  subject: Subject;
-
-  @OneToMany(() => Questionnaire, (questionnaire) => questionnaire.exam)
-  questionnaires: Questionnaire[];
+  // Relasi manual (opsional)
+  subject?: any;
+  questionnaires?: any[];
 }

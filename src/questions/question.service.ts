@@ -1,61 +1,95 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { Question } from './entities/question.entity';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 
 @Injectable()
 export class QuestionService {
-  constructor(
-    @InjectRepository(Question)
-    private readonly questionRepository: Repository<Question>
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {}
 
   async create(dto: CreateQuestionDto): Promise<Question> {
-    const question = this.questionRepository.create({
-      ...dto,
-      type: dto.type as Question['type'],
-    });
-    return this.questionRepository.save(question);
+    try {
+      const { data, error } = await this.supabase
+        .from('questions')
+        .insert({ ...dto, type: dto.type, created_at: new Date() })
+        .select()
+        .single();
+
+      if (error || !data) throw new InternalServerErrorException(error?.message || 'Failed to create question');
+
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   async findAll(examId?: string): Promise<Question[]> {
-    const queryBuilder = this.questionRepository.createQueryBuilder('question')
-      .where('question.deleted_at IS NULL');
+    try {
+      let query = this.supabase
+        .from('questions')
+        .select('*')
+        .is('deleted_at', null);
 
-    if (examId) {
-      queryBuilder.andWhere('question.exam_id = :examId', { examId });
+      if (examId) query = query.eq('exam_id', examId);
+
+      const { data, error } = await query;
+
+      if (error) throw new InternalServerErrorException(error.message);
+
+      return data || [];
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
     }
-
-    return queryBuilder.getMany();
   }
 
   async findById(id: string): Promise<Question | null> {
-    return this.questionRepository.findOne({
-      where: { id, deleted_at: IsNull() }
-    });
+    try {
+      const { data, error } = await this.supabase
+        .from('questions')
+        .select('*')
+        .eq('id', id)
+        .is('deleted_at', null)
+        .single();
+
+      if (error) return null;
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   async update(id: string, dto: UpdateQuestionDto): Promise<Question> {
-    const question = await this.findById(id);
-    if (!question) throw new NotFoundException(`Question ${id} not found`);
+    try {
+      const { data, error } = await this.supabase
+        .from('questions')
+        .update({ ...dto, updated_at: new Date() })
+        .eq('id', id)
+        .select()
+        .single();
 
-    Object.assign(question, {
-      ...dto,
-      type: dto.type as Question['type'],
-    });
+      if (error || !data) throw new NotFoundException(`Question ${id} not found`);
 
-    return this.questionRepository.save(question);
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   async softDelete(id: string, deletedBy: string): Promise<Question> {
-    const question = await this.findById(id);
-    if (!question) throw new NotFoundException(`Question ${id} not found`);
+    try {
+      const { data, error } = await this.supabase
+        .from('questions')
+        .update({ deleted_at: new Date(), deleted_by: deletedBy })
+        .eq('id', id)
+        .select()
+        .single();
 
-    question.deleted_at = new Date();
-    question.deleted_by = deletedBy;
+      if (error || !data) throw new NotFoundException(`Question ${id} not found`);
 
-    return this.questionRepository.save(question);
+      return data;
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 }

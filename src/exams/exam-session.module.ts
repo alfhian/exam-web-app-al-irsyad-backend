@@ -1,12 +1,10 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { ExamSession } from './entities/exam-session.entity';
-import { ExamSubmission } from './entities/exam-submission.entity';
 import { ExamSessionService } from './exam-session.service';
 import { ExamSessionController } from './exam-session.controller';
+import { SupabaseModule } from '../supabase/supabase.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ExamSession, ExamSubmission])],
+  imports: [SupabaseModule],
   providers: [ExamSessionService],
   controllers: [ExamSessionController],
   exports: [ExamSessionService],

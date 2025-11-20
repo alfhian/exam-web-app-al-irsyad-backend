@@ -1,20 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not, IsNull, In } from 'typeorm';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { ExamSubmission } from './entities/exam-submission.entity';
 import { Exam } from './entities/exam.entity';
 import { Questionnaire } from 'src/questionnaires/entities/questionnaire.entity';
 
 @Injectable()
 export class TeacherExamsService {
-  constructor(
-    @InjectRepository(ExamSubmission)
-    private readonly examSubmissionRepository: Repository<ExamSubmission>,
-    @InjectRepository(Exam)
-    private readonly examRepository: Repository<Exam>,
-    @InjectRepository(Questionnaire)
-    private readonly questionnaireRepository: Repository<Questionnaire>,
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {}
 
   /**
    * 🔹 Ambil daftar ujian yang sudah pernah dikerjakan siswa
@@ -22,158 +14,211 @@ export class TeacherExamsService {
    */
   async getSubmittedExamsByTeacher(
     search = '',
-    sort = 'date',
+    sort = 'created_at',
     order: 'asc' | 'desc' = 'desc',
     page = 1,
     limit = 10,
   ) {
-    const offset = (page - 1) * limit;
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    // Ambil semua exam_submissions dengan exam_id dan score
-    const submissions = await this.examSubmissionRepository.find({
-      select: ['exam_id', 'score'],
-      where: { exam_id: Not(IsNull()) }
-    });
+    try {
+      // Ambil semua exam_submissions untuk hitung unscored_count
+      const { data: submissions } = await this.supabase
+        .from('exam_submissions')
+        .select('exam_id,score');
 
-    const examIds = [...new Set(submissions.map((s) => s.exam_id))];
-    if (examIds.length === 0) {
-      return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+      const examIds = [...new Set(submissions?.map(s => s.exam_id) || [])];
+      if (!examIds.length) return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
+
+      const unscoredMap: Record<string, number> = {};
+      (submissions || []).forEach(s => {
+        if (!unscoredMap[s.exam_id]) unscoredMap[s.exam_id] = 0;
+        if (s.score === null || s.score === undefined) unscoredMap[s.exam_id]++;
+      });
+
+      // Ambil daftar ujian
+      let query = this.supabase
+        .from('exams')
+        .select('*', { count: 'exact' })
+        .in('id', examIds);
+
+      if (search) {
+        query = query.ilike('title', `%${search}%`);
+      }
+
+      query = query.order(sort, { ascending: order === 'asc' }).range(from, to);
+
+      const { data: exams, count, error } = await query;
+      if (error) throw new InternalServerErrorException(error.message);
+
+      const examsWithUnscored = (exams || []).map(e => ({
+        ...e,
+        unscored_count: unscoredMap[e.id] || 0,
+      }));
+
+      return {
+        data: examsWithUnscored,
+        meta: {
+          total: count || 0,
+          page,
+          limit,
+          totalPages: Math.ceil((count || 0) / limit),
+        },
+      };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
     }
-
-    // Hitung jumlah submission belum dinilai per exam
-    const unscoredMap = submissions.reduce((acc, curr) => {
-      if (!acc[curr.exam_id]) acc[curr.exam_id] = 0;
-      if (curr.score === null || curr.score === undefined) acc[curr.exam_id]++;
-      return acc;
-    }, {});
-
-    // Ambil daftar exam
-    const queryBuilder = this.examRepository.createQueryBuilder('exam')
-      .leftJoinAndSelect('exam.subject', 'subjects')
-      .leftJoin('exam_submissions', 'submission', 'submission.exam_id = exam.id')
-      .addSelect('COUNT(submission.id)', 'submission_count')
-      .where('exam.id IN (:...examIds)', { examIds })
-      .groupBy('exam.id, subjects.id')
-      .orderBy(`exam.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(limit);
-
-    // Filter pencarian
-    if (search) {
-      const keyword = search.trim().toLowerCase();
-      queryBuilder.andWhere(
-        '(LOWER(exam.title) LIKE :keyword OR LOWER(exam.type) LIKE :keyword OR LOWER(subjects.name) LIKE :keyword)',
-        { keyword: `%${keyword}%` }
-      );
-    }
-
-    const [data, total] = await queryBuilder.getManyAndCount();
-
-    // Tambahkan kolom unscored_count
-    const examsWithUnscored = data.map((exam) => ({
-      ...exam,
-      unscored_count: unscoredMap[exam.id] ?? 0,
-    }));
-
-    return {
-      data: examsWithUnscored,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
-    };
   }
 
   /**
    * 🔹 Ambil daftar siswa yang sudah submit ujian tertentu
    * ✅ Urutkan submission belum di-scoring (score null) ke atas
    */
-  async getStudentsByExam(examId: string, search = '', page = 1, limit = 10) {
-    const offset = (page - 1) * limit;
+  async getStudentsByExam(
+    examId: string,
+    search = '',
+    page = 1,
+    limit = 10,
+  ) {
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    const queryBuilder = this.examSubmissionRepository.createQueryBuilder('submission')
-      .leftJoinAndSelect('submission.student', 'users')
-      .leftJoinAndSelect('submission.exam', 'exams')
-      .where('submission.exam_id = :examId', { examId })
-      .orderBy('submission.score', 'ASC', 'NULLS FIRST')
-      .addOrderBy('submission.created_at', 'DESC')
-      .skip(offset)
-      .take(limit);
+    try {
+      // 1️⃣ Ambil semua submissions untuk exam tertentu
+      const { data: submissions, error: subError } = await this.supabase
+        .from('exam_submissions')
+        .select('*')
+        .eq('exam_id', examId);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+      if (subError) throw new InternalServerErrorException(subError.message);
+      if (!submissions || !submissions.length)
+        return { data: [], meta: { total: 0, page, limit, totalPages: 0 } };
 
-    // Filter berdasarkan nama siswa
-    const filteredData = search
-      ? data.filter((s) => {
-          return s.student?.name?.toLowerCase().includes(search.toLowerCase());
-        })
-      : data;
+      // 2️⃣ Ambil semua student terkait
+      const studentIds = submissions.map(s => s.student_id);
+      const { data: students, error: stuError } = await this.supabase
+        .from('users')
+        .select('*')
+        .in('id', studentIds);
 
-    return {
-      data: filteredData,
-      meta: {
-        total: search ? filteredData.length : total,
-        page,
-        limit,
-        totalPages: Math.ceil((search ? filteredData.length : total) / limit),
-      },
-    };
+      if (stuError) throw new InternalServerErrorException(stuError.message);
+
+      // 3️⃣ Gabungkan submissions dengan student
+      let combined = submissions.map(sub => ({
+        ...sub,
+        student: students.find(s => s.id === sub.student_id) || null,
+      }));
+
+      // 4️⃣ Filter berdasarkan nama student jika ada search
+      if (search.trim()) {
+        combined = combined.filter(c =>
+          c.student?.name.toLowerCase().includes(search.toLowerCase()),
+        );
+      }
+
+      // 5️⃣ Urutkan: score null pertama, lalu score ascending, lalu created_at descending
+      combined.sort((a, b) => {
+        if (a.score === null && b.score !== null) return -1;
+        if (a.score !== null && b.score === null) return 1;
+        if (a.score !== null && b.score !== null) {
+          if (a.score !== b.score) return a.score - b.score;
+        }
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+
+      // 6️⃣ Pagination
+      const total = combined.length;
+      const paginated = combined.slice(from, to + 1);
+
+      return {
+        data: paginated,
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
 
   /**
    * 🔹 Ambil detail ujian yang disubmit siswa
    */
   async getSubmissionDetail(submissionId: string) {
-    const submission = await this.examSubmissionRepository.findOne({
-      where: { id: submissionId },
-      relations: ['student', 'exam', 'exam.subject']
-    });
+    try {
+      // ambil submission dulu
+      const { data: submission, error } = await this.supabase
+        .from('exam_submissions')
+        .select('*')
+        .eq('id', submissionId)
+        .single();
 
-    if (!submission) {
-      throw new NotFoundException(`Submission ${submissionId} not found.`);
-    }
+      if (error || !submission) throw new NotFoundException(`Submission not found`);
 
-    const answerList = submission.answers || [];
-    
-    // Ambil semua question_id unik dari jawaban
-    const questionIds = [...new Set(answerList.map((a) => a.question_id))];
+      // ambil student manual
+      const { data: student } = await this.supabase
+        .from('users')
+        .select('*')
+        .eq('id', submission.student_id)
+        .single();
 
-    // Ambil semua pertanyaan terkait dari tabel questionnaire
-    const questions = await this.questionnaireRepository.findBy({
-      id: questionIds.length > 0 ? In(questionIds) : undefined,
-    });
+      // ambil exam manual + subject
+      const { data: examRaw } = await this.supabase
+        .from('exams')
+        .select('*')
+        .eq('id', submission.exam_id)
+        .single();
 
-    // Gabungkan pertanyaan dengan jawaban
-    const answersWithQuestions = answerList.map((a) => ({
-      ...a,
-      question: questions.find((q) => q.id === a.question_id) || null,
-    }));
+      let subject = null;
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/prefer-for-of, @typescript-eslint/no-empty-function, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unnecessary-condition, @typescript-eslint/no-empty-interface, @typescript-eslint/no-unused-expressions, @typescript-eslint/no-empty-block
-    const mappedQuestions = questions.map((q) => {
-      const ans = submission.answers?.find((a) => a.question_id === q.id);
-      return {
-        ...q,
-        student_answer: ans?.answer ?? null,
-        is_correct: ans?.is_correct ?? null,
-        answers: answersWithQuestions,
+      if (examRaw?.subject_id) {
+        const { data: subj } = await this.supabase
+          .from('subjects') // <- ubah jika nama tabel beda
+          .select('*')
+          .eq('id', examRaw.subject_id)
+          .single();
+        
+        subject = subj;
+      }
+
+      const exam = {
+        ...examRaw,
+        subject,
       };
-    });
 
-    return {
-      id: submission.id,
-      created_at: submission.created_at,
-      score: submission.score,
-      exam: {
-        ...submission.exam,
-        subject: submission.exam.subject || null,
-      },
-      student: submission.student,
-      questions: mappedQuestions,
-    };
+      // ambil questions manual
+      const questionIds = [...new Set((submission.answers || []).map(a => a.question_id))];
+
+      const { data: questions } = await this.supabase
+        .from('questionnaires')
+        .select('*')
+        .in('id', questionIds);
+
+      const mappedQuestions = (questions || []).map(q => {
+        const ans = submission.answers.find(a => a.question_id === q.id);
+        return {
+          ...q,
+          student_answer: ans?.answer ?? null,
+          is_correct: ans?.is_correct ?? null,
+        };
+      });
+
+      return {
+        ...submission,
+        exam,
+        student,
+        questions: mappedQuestions,
+      };
+
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
   }
+
 
   /**
    * ✅ Simpan hasil penilaian guru + total skor
@@ -183,31 +228,39 @@ export class TeacherExamsService {
     scores: { question_id: string; is_correct: boolean }[],
     totalScore?: number,
   ) {
-    const existing = await this.examSubmissionRepository.findOne({
-      where: { id: submissionId },
-      select: ['id', 'answers', 'score']
-    });
+    try {
+      const { data: submission, error } = await this.supabase
+        .from('exam_submissions')
+        .select('answers, score')
+        .eq('id', submissionId)
+        .single();
 
-    if (!existing) {
-      throw new NotFoundException('Submission not found');
+      if (error || !submission) throw new NotFoundException('Submission not found');
+
+      const updatedAnswers = (submission.answers || []).map(a => {
+        const match = scores.find(s => s.question_id === a.question_id);
+        return match ? { ...a, is_correct: match.is_correct } : a;
+      });
+
+      const { data, error: updateError } = await this.supabase
+        .from('exam_submissions')
+        .update({
+          answers: updatedAnswers,
+          score: typeof totalScore === 'number' ? totalScore : submission.score,
+        })
+        .eq('id', submissionId)
+        .select()
+        .single();
+
+      if (updateError) throw new InternalServerErrorException(updateError.message);
+
+      return {
+        message: 'Scoring updated successfully',
+        submission_id: submissionId,
+        score: data?.score,
+      };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
     }
-
-    const updatedAnswers = (existing.answers || []).map((a) => {
-      const match = scores.find((s) => s.question_id === a.question_id);
-      return match ? { ...a, is_correct: match.is_correct } : a;
-    });
-
-    existing.answers = updatedAnswers;
-    if (typeof totalScore === 'number') {
-      existing.score = totalScore;
-    }
-
-    const data = await this.examSubmissionRepository.save(existing);
-
-    return {
-      message: 'Scoring updated successfully',
-      submission_id: submissionId,
-      score: data.score,
-    };
   }
 }

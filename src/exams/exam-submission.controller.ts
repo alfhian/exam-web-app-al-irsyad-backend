@@ -5,34 +5,31 @@ import {
   Param,
   Body,
   Query,
-  InternalServerErrorException,
-  BadRequestException,
   Req,
+  BadRequestException,
+  InternalServerErrorException,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ExamSubmissionService } from './exam-submission.service';
-import { CreateExamSubmissionDto } from './dto/create-exam-submission.dto';
 
 @Controller('exam-submissions')
 @UseGuards(AuthGuard('jwt'))
 export class ExamSubmissionController {
-  constructor(
-    private readonly examSubmissionService: ExamSubmissionService,
-  ) {}
+  constructor(private readonly examSubmissionService: ExamSubmissionService) {}
 
   @Get('me')
-  async MySubmission(
-    @Query('search') search: string = '',
+  async mySubmission(
+    @Query('search') search = '',
     @Query('sort') sort = 'title',
     @Query('order') order: 'asc' | 'desc' = 'asc',
     @Query('page') page = '1',
     @Query('limit') limit = '10',
-    @Req() req: any) {
+    @Req() req: any,
+  ) {
     const studentId = req.user?.sub;
-    if (!studentId) {
-      throw new BadRequestException('User not authenticated');
-    }
+    if (!studentId) throw new BadRequestException('User not authenticated');
+
     return this.examSubmissionService.getSubmittedExamsByStudent(
       studentId,
       search,
@@ -45,12 +42,8 @@ export class ExamSubmissionController {
 
   @Get(':id')
   async getSubmissionDetail(@Param('id') id: string, @Req() req: any) {
-    try {
-      const studentId = req.user?.sub;
-      return await this.examSubmissionService.getSubmissionDetail(id, studentId);
-    } catch (err) {
-      throw new InternalServerErrorException(err.message);
-    }
+    const studentId = req.user?.sub;
+    return this.examSubmissionService.getSubmissionDetail(id, studentId);
   }
 
   @Post(':examId')
@@ -59,30 +52,24 @@ export class ExamSubmissionController {
     @Body() body: { answers: any[] },
     @Req() req: any,
   ) {
-    try {
-      const studentId = req.user?.sub;
-      console.log('Raw body:', body);
-      console.log('isArray(answers)?', Array.isArray(body.answers));
-
-      return await this.examSubmissionService.submit({
-        exam_id: examId,
-        student_id: studentId,
-        answers: body.answers,
-        created_by: studentId,
-      });
-    } catch (error) {
-      console.error('❌ Submit error:', error);
-      throw new InternalServerErrorException(error.message);
+    const studentId = req.user?.sub;
+    if (!Array.isArray(body.answers)) {
+      throw new BadRequestException('answers must be an array');
     }
-  }
 
+    return this.examSubmissionService.submit({
+      exam_id: examId,
+      student_id: studentId,
+      answers: body.answers,
+      created_by: studentId,
+    });
+  }
 
   @Get(':examId/me')
   async checkMySubmission(@Param('examId') examId: string, @Req() req: any) {
     const studentId = req.user?.sub;
-    if (!studentId) {
-      throw new BadRequestException('User not authenticated');
-    }
+    if (!studentId) throw new BadRequestException('User not authenticated');
+
     return this.examSubmissionService.hasSubmitted(examId, studentId);
   }
 }

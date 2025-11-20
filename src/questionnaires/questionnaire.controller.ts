@@ -23,26 +23,31 @@ import { UpdateQuestionnaireDto } from './dto/update-questionnaire.dto';
 export class QuestionnaireController {
   constructor(private readonly questionnaireService: QuestionnaireService) {}
 
+  /** -------------------------
+   * CREATE QUESTION
+   * ------------------------- */
   @Post()
   async create(
     @Param('examId') examId: string,
     @Body() dto: CreateQuestionnaireDto,
     @Req() req: any,
   ): Promise<Questionnaire> {
-    const createdBy = req.user?.sub;
+    const userId = req.user?.sub;
+
     if (!dto.question || !dto.type) {
-      throw new BadRequestException(
-        'Missing required fields: question, type',
-      );
+      throw new BadRequestException('Missing required fields: question, type');
     }
 
     return this.questionnaireService.create({
       ...dto,
       exam_id: examId,
-      created_by: createdBy,
+      created_by: userId,
     });
   }
 
+  /** -------------------------
+   * GET ALL WITH PAGINATION
+   * ------------------------- */
   @Get()
   async getAll(
     @Param('examId') examId: string,
@@ -66,27 +71,38 @@ export class QuestionnaireController {
     }
   }
 
+  /** -------------------------
+   * GET SINGLE QUESTION
+   * ------------------------- */
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.questionnaireService.findById(id);
   }
 
+  /** -------------------------
+   * UPDATE QUESTION
+   * ------------------------- */
   @Put(':id')
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateQuestionnaireDto,
     @Req() req: any,
   ) {
-    const updatedBy = req.user?.sub;
+    const userId = req.user?.sub;
+
     return this.questionnaireService.update(id, {
       ...dto,
-      updated_by: updatedBy,
+      updated_by: userId,
     });
   }
 
+  /** -------------------------
+   * SOFT DELETE QUESTION
+   * ------------------------- */
   @Delete(':id')
   async softDelete(@Param('id') id: string, @Req() req: any) {
-    const deletedBy = req.user?.sub;
-    return this.questionnaireService.softDelete(id, deletedBy);
+    const userId = req.user?.sub;
+
+    return this.questionnaireService.softDelete(id, userId);
   }
 }

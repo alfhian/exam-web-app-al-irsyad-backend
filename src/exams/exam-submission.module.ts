@@ -1,14 +1,23 @@
-import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { ExamSubmission } from './entities/exam-submission.entity';
-import { Questionnaire } from '../questionnaires/entities/questionnaire.entity';
+import { Module, Global } from '@nestjs/common';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ExamSubmissionService } from './exam-submission.service';
-import { ExamSessionController } from './exam-session.controller';
 import { ExamSubmissionController } from './exam-submission.controller';
+import { SupabaseModule } from '../supabase/supabase.module';
 
+@Global()
 @Module({
-  imports: [TypeOrmModule.forFeature([ExamSubmission, Questionnaire])],
-  providers: [ExamSubmissionService],
+  imports: [SupabaseModule],
+  providers: [
+    {
+      provide: SupabaseClient,
+      useValue: createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_KEY!
+      ),
+    },
+    ExamSubmissionService,
+  ],
   controllers: [ExamSubmissionController],
+  exports: [ExamSubmissionService, SupabaseClient],
 })
 export class ExamSubmissionModule {}

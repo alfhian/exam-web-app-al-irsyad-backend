@@ -1,24 +1,25 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { SupabaseClient } from '@supabase/supabase-js';
 import { Questionnaire } from './entities/questionnaire.entity';
 import { CreateQuestionnaireDto } from './dto/create-questionnaire.dto';
 import { UpdateQuestionnaireDto } from './dto/update-questionnaire.dto';
 
 @Injectable()
 export class QuestionnaireService {
-  constructor(
-    @InjectRepository(Questionnaire)
-    private readonly questionnaireRepository: Repository<Questionnaire>
-  ) {}
+  constructor(private readonly supabase: SupabaseClient) {}
 
-  async create(dto: CreateQuestionnaireDto): Promise<Questionnaire> {
-    const questionnaire = this.questionnaireRepository.create({
-      ...dto,
-      created_at: new Date(),
-      created_by: dto.created_by,
-    });
-    return this.questionnaireRepository.save(questionnaire);
+  async create(dto: CreateQuestionnaireDto & { created_by: string }): Promise<Questionnaire> {
+    const { data, error } = await this.supabase
+      .from('questionnaires')
+      .insert({
+        ...dto,
+        created_at: new Date(),
+      })
+      .select()
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data!;
   }
 
   async getDataWithPagination(
@@ -29,71 +30,95 @@ export class QuestionnaireService {
     page: number,
     limit: number,
   ): Promise<{ data: Questionnaire[]; meta: any }> {
-    const offset = (page - 1) * limit;
-    const keyword = search?.trim().toLowerCase();
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    const queryBuilder = this.questionnaireRepository.createQueryBuilder('questionnaire')
-      .where('questionnaire.exam_id = :examId', { examId })
-      .andWhere('questionnaire.deleted_at IS NULL');
+    let query = this.supabase
+      .from('questionnaires')
+      .select('*', { count: 'exact' })
+      .eq('exam_id', examId)
+      .is('deleted_at', null);
 
-    if (keyword) {
-      queryBuilder.andWhere(
-        '(LOWER(questionnaire.question) LIKE :keyword OR LOWER(questionnaire.type) LIKE :keyword)',
-        { keyword: `%${keyword}%` }
-      );
+    if (search) {
+      query = query.ilike('question', `%${search}%`).or(`type.ilike.%${search}%`);
     }
 
-    queryBuilder
-      .orderBy(`questionnaire.${sort}`, order.toUpperCase() as 'ASC' | 'DESC')
-      .skip(offset)
-      .take(limit);
+    query = query.order(sort, { ascending: order === 'asc' }).range(from, to);
 
-    const [data, total] = await queryBuilder.getManyAndCount();
+    const { data, count, error } = await query;
+    if (error) throw new InternalServerErrorException(error.message);
 
     return {
-      data,
+      data: data || [],
       meta: {
-        total,
+        total: count || 0,
         page,
         limit,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil((count || 0) / limit),
       },
     };
   }
 
   async findById(id: string): Promise<Questionnaire> {
-    const questionnaire = await this.questionnaireRepository.findOne({
-      where: { id, deleted_at: IsNull() }
-    });
+    const { data, error } = await this.supabase
+      .from('questionnaires')
+      .select('*')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .single();
 
-    if (!questionnaire) {
-      throw new NotFoundException(`Questionnaire ${id} not found`);
-    }
-
-    return questionnaire;
+    if (error || !data) throw new NotFoundException(`Questionnaire ${id} not found`);
+    return data;
   }
 
   async update(
     id: string,
     dto: UpdateQuestionnaireDto & { updated_by?: string },
   ): Promise<Questionnaire> {
-    const questionnaire = await this.findById(id);
+    const { data: existing, error: findError } = await this.supabase
+      .from('questionnaires')
+      .select('*')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .single();
 
-    Object.assign(questionnaire, {
-      ...dto,
-      updated_at: new Date(),
-      updated_by: dto.updated_by,
-    });
+    if (findError || !existing) throw new NotFoundException(`Questionnaire ${id} not found`);
 
-    return this.questionnaireRepository.save(questionnaire);
+    const { data, error } = await this.supabase
+      .from('questionnaires')
+      .update({
+        ...dto,
+        updated_at: new Date(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data!;
   }
 
   async softDelete(id: string, deletedBy: string): Promise<Questionnaire> {
-    const questionnaire = await this.findById(id);
+    const { data: existing, error: findError } = await this.supabase
+      .from('questionnaires')
+      .select('*')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .single();
 
-    questionnaire.deleted_at = new Date();
-    questionnaire.deleted_by = deletedBy;
+    if (findError || !existing) throw new NotFoundException(`Questionnaire ${id} not found`);
 
-    return this.questionnaireRepository.save(questionnaire);
+    const { data, error } = await this.supabase
+      .from('questionnaires')
+      .update({
+        deleted_at: new Date(),
+        deleted_by: deletedBy,
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw new InternalServerErrorException(error.message);
+    return data!;
   }
 }
