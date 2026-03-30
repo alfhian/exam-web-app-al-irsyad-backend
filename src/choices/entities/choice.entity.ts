@@ -2,12 +2,10 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  ManyToOne,
   CreateDateColumn,
   UpdateDateColumn,
   DeleteDateColumn,
 } from 'typeorm';
-import { Question } from '../../questions/entities/question.entity';
 
 @Entity('choices')
 export class Choice {
@@ -20,8 +18,8 @@ export class Choice {
   @Column({ default: false })
   isCorrect: boolean;
 
-  @ManyToOne(() => Question, (question) => question.choices, { onDelete: 'CASCADE' })
-  question: Question;
+  @Column({ name: 'question_id', type: 'uuid' })
+  questionId: string;
 
   @CreateDateColumn()
   created_at: Date;
