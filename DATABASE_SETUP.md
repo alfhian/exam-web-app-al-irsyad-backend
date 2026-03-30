@@ -25,6 +25,7 @@ DB_NAME=al_irsyad_exam
 # Application Configuration
 NODE_ENV=development
 PORT=3000
+ENABLE_TYPEORM=true
 
 # JWT Configuration
 JWT_SECRET=your_jwt_secret_key_here

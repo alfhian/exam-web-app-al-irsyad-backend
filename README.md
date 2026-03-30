@@ -42,10 +42,12 @@ cp .env.example .env
 
 Main variables used by this backend:
 
-- `PORT`, `NODE_ENV`, `CORS_ORIGIN`
+- `PORT`, `NODE_ENV`, `CORS_ORIGIN`, `ENABLE_TYPEORM`
 - `JWT_SECRET`
 - `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`
 - `SUPABASE_URL`, `SUPABASE_KEY`
+
+Set `ENABLE_TYPEORM=true` only when PostgreSQL is reachable from the server.
 
 
 ### PM2 Note

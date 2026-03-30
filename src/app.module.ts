@@ -11,17 +11,23 @@ import { SubjectModule } from './subjects/subject.module';
 import { QuestionnaireModule } from './questionnaires/questionnaire.module';
 import { getDatabaseConfig } from './config/database.config';
 
+const enableTypeOrm = process.env.ENABLE_TYPEORM === 'true';
+
 @Module({
   imports: [
     SupabaseModule,
     ConfigModule.forRoot({
       isGlobal: true,
     }),
-    TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: getDatabaseConfig,
-      inject: [ConfigService],
-    }),
+    ...(enableTypeOrm
+      ? [
+          TypeOrmModule.forRootAsync({
+            imports: [ConfigModule],
+            useFactory: getDatabaseConfig,
+            inject: [ConfigService],
+          }),
+        ]
+      : []),
     AuthModule,
     UsersModule,
     ExamModule,
