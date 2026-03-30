@@ -1,10 +1,20 @@
-import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
 import { AppModule } from './app.module';
 import * as bodyParser from 'body-parser';
+import { config as dotenvConfig } from 'dotenv';
+
+const envCandidates = [
+  join(process.cwd(), '.env'),
+  join(__dirname, '..', '.env'),
+  join(__dirname, '..', '..', '.env'),
+];
+
+for (const envPath of envCandidates) {
+  dotenvConfig({ path: envPath, override: false });
+}
 
 async function bootstrap() {
   // 🧩 Nonaktifkan body parser agar Multer bisa membaca stream multipart

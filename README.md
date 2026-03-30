@@ -47,6 +47,17 @@ Main variables used by this backend:
 - `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`
 - `SUPABASE_URL`, `SUPABASE_KEY`
 
+
+### PM2 Note
+
+If you run with PM2, make sure env variables are available to the process.
+Recommended: run from backend directory and pass `--update-env` when restarting.
+
+```bash
+pm2 start dist/src/main.js --name nestjs-app --cwd /path/to/backend
+pm2 restart nestjs-app --update-env
+```
+
 ## Compile and run the project
 
 ```bash
