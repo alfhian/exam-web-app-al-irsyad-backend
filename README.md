@@ -31,6 +31,22 @@
 $ yarn install
 ```
 
+
+## Environment Variables
+
+Copy `.env.example` into `.env` before starting development:
+
+```bash
+cp .env.example .env
+```
+
+Main variables used by this backend:
+
+- `PORT`, `NODE_ENV`, `CORS_ORIGIN`
+- `JWT_SECRET`
+- `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`
+- `SUPABASE_URL`, `SUPABASE_KEY`
+
 ## Compile and run the project
 
 ```bash
