@@ -31,6 +31,42 @@
 $ yarn install
 ```
 
+
+## Environment Variables
+
+Copy `.env.example` into `.env` before starting development:
+
+```bash
+cp .env.example .env
+```
+
+Main variables used by this backend:
+
+- `PORT`, `NODE_ENV`, `CORS_ORIGIN`, `ENABLE_TYPEORM`
+- `JWT_SECRET`
+- `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME`
+- `SUPABASE_URL`, `SUPABASE_KEY`
+
+Set `ENABLE_TYPEORM=true` only when PostgreSQL is reachable from the server.
+
+
+### PM2 Note
+
+If you run with PM2, make sure env variables are available to the process.
+Recommended: run from backend directory and pass `--update-env` when restarting.
+
+```bash
+# after git pull
+npm install
+npm run build
+
+pm2 start dist/src/main.js --name nestjs-app --cwd /path/to/backend
+# or if already exists
+pm2 restart nestjs-app --update-env
+```
+
+If you still see `Choice#question was not found`, usually PM2 is running old `dist` output. Re-run `npm run build` before restart.
+
 ## Compile and run the project
 
 ```bash

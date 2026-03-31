@@ -25,9 +25,17 @@ DB_NAME=al_irsyad_exam
 # Application Configuration
 NODE_ENV=development
 PORT=3000
+ENABLE_TYPEORM=true
 
 # JWT Configuration
 JWT_SECRET=your_jwt_secret_key_here
+
+# Supabase Configuration
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_KEY=your_supabase_key_here
+
+# CORS Configuration
+CORS_ORIGIN=http://localhost:5173
 ```
 
 ## Database Setup Steps

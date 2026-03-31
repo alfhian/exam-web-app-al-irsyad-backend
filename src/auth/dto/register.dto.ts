@@ -1,5 +1,4 @@
-import { IsString, IsBoolean, IsDate } from "class-validator";
-import { Type } from "class-transformer";
+import { IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class RegisterDto {
   @IsString()
@@ -14,13 +13,7 @@ export class RegisterDto {
   @IsString()
   role: string; // e.g., 'student', 'teacher', 'admin'
 
-  @IsBoolean()
-  is_active: boolean;
-
-  @Type(() => Date)
-  @IsDate()
-  created_at: Date;
-
-  @IsString()
-  created_by: string; // User ID of the creator
+  @IsOptional()
+  @IsUUID()
+  created_by?: string;
 }
